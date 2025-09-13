@@ -253,11 +253,30 @@
             }
 
             .leaflet-popup-content-wrapper {
-                max-width: 280px;
+                max-width: 280px !important;
+                min-width: 250px;
             }
 
             .popup-header h3 {
                 font-size: 16px;
+            }
+
+            /* Ensure popup stays visible on mobile */
+            .leaflet-popup {
+                pointer-events: auto !important;
+            }
+
+            .leaflet-popup-content {
+                touch-action: pan-y;
+            }
+
+            /* Make sure close button is accessible on mobile */
+            .leaflet-popup-close-button {
+                font-size: 20px;
+                padding: 8px;
+                line-height: 1;
+                width: auto;
+                height: auto;
             }
         }
     </style>
@@ -330,7 +349,10 @@
                         zoomControl: true,
                         scrollWheelZoom: true,
                         doubleClickZoom: true,
-                        touchZoom: true
+                        touchZoom: true,
+                        tap: true,
+                        tapTolerance: 15,
+                        bounceAtZoomLimits: false
                     }).setView([54.5, -3.0], 6); // UK center
 
                     // Add tile layer
@@ -592,7 +614,12 @@
                 var popupContent = createPopupContent(clinic);
                 marker.bindPopup(popupContent, {
                     maxWidth: 350,
-                    className: 'earwax-popup'
+                    className: 'earwax-popup',
+                    closeOnClick: false,
+                    autoClose: false,
+                    closeButton: true,
+                    autoPan: true,
+                    keepInView: true
                 });
 
                 markerClusterGroup.addLayer(marker);
