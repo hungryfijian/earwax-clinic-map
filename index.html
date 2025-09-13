@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Earwax Clinic Network - Find a Qualified Practitioner</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Earwax Clinic Brand Styling */
+        :root {
+            --primary-color: #00796B;
+            --secondary-color: #004D40;
+            --accent-color: #4CAF50;
+            --warning-color: #FF6B35;
+            --light-bg: #F5F5F5;
+            --text-dark: #212121;
+            --text-light: #757575;
+            --success-color: #2E7D32;
+            --verified-color: #1565C0;
+        }
+
+        .earwax-map-container {
+            width: 100%;
+            height: 600px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+            border: 2px solid var(--primary-color);
+            font-family: 'Inter', sans-serif;
+            position: relative;
+        }
+
+        .earwax-map {
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #E0F2F1 0%, #00796B 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            font-family: 'Poppins', sans-serif;
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: earwaxSpin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes earwaxSpin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Search Box Styling */
+        .postcode-search-container {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 2px solid var(--primary-color);
+        }
+
+        /* Virtual Number Marker */
+        .virtual-number-marker {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
+            color: white;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            border: 3px solid white;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .practice-number-marker {
+            background: linear-gradient(135deg, #757575 0%, #424242 100%);
+            color: white;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            border: 2px solid white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Enhanced Popup Styling */
+        .leaflet-popup-content-wrapper {
+            background: #ffffff;
+            border: 2px solid var(--primary-color);
+            border-radius: 10px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+            font-family: 'Inter', sans-serif;
+            max-width: 350px;
+        }
+
+        .leaflet-popup-content {
+            margin: 0;
+            padding: 0;
+            line-height: 1.5;
+            font-size: 14px;
+            color: var(--text-dark);
+        }
+
+        .popup-header {
+            background: var(--primary-color);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .popup-header h3 {
+            margin: 0;
+            font-family: 'Poppins', sans-serif;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .popup-virtual-number {
+            display: inline-block;
+            background: white;
+            color: var(--primary-color);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .popup-body {
+            padding: 16px;
+        }
+
+        .popup-section {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #E0E0E0;
+        }
+
+        .popup-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .popup-label {
+            font-weight: 600;
+            color: var(--secondary-color);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .registration-badge {
+            display: inline-block;
+            background: var(--verified-color);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .skills-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .skill-tag {
+            background: var(--light-bg);
+            color: var(--text-dark);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            border: 1px solid #E0E0E0;
+        }
+
+        .pricing-info {
+            background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 8px;
+        }
+
+        .price-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 4px 0;
+        }
+
+        .price-value {
+            font-weight: 600;
+            color: var(--success-color);
+        }
+
+        .contact-button {
+            display: inline-block;
+            background: var(--primary-color);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 500;
+            margin-top: 8px;
+            transition: background 0.3s ease;
+        }
+
+        .contact-button:hover {
+            background: var(--secondary-color);
+        }
+
+        /* Legend */
+        .map-legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            font-size: 12px;
+        }
+
+        .legend-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--secondary-color);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 4px 0;
+        }
+
+        .legend-marker {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .legend-marker.virtual {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
+        }
+
+        .legend-marker.pending {
+            background: linear-gradient(135deg, #757575 0%, #424242 100%);
+        }
+
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            .earwax-map-container {
+                height: 500px;
+            }
+
+            .map-legend {
+                bottom: 10px;
+                left: 10px;
+                padding: 8px;
+                font-size: 11px;
+            }
+
+            .leaflet-popup-content-wrapper {
+                max-width: 280px;
+            }
+
+            .popup-header h3 {
+                font-size: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="earwax-clinic-map"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+    <script>
+        (function(window, document) {
+            'use strict';
+
+            // Global variables
+            var mapInstance = null;
+            var markersArray = [];
+            var markerClusterGroup = null;
+            var isInitialized = false;
+
+            // Google Sheets configuration - UPDATE WITH YOUR ACTUAL VALUES
+            var GOOGLE_SHEET_ID = '1G8dXQC9sVHSXgslYfq-PWuHHcv274jCJRadXp2bgAsw';
+            var SHEET_GID = '0'; // Usually 0 for first sheet
+
+            var CSV_URL = 'https://docs.google.com/spreadsheets/d/' + GOOGLE_SHEET_ID + '/export?format=csv&gid=' + SHEET_GID;
+
+            // Wait for dependencies
+            function waitForDependencies(callback) {
+                var checkReady = function() {
+                    if (typeof L !== 'undefined' && 
+                        typeof L.markerClusterGroup !== 'undefined' && 
+                        document.readyState === 'complete') {
+                        callback();
+                    } else {
+                        setTimeout(checkReady, 100);
+                    }
+                };
+                checkReady();
+            }
+
+            // Initialize the map
+            function initEarwaxMap() {
+                if (isInitialized) return;
+
+                var container = document.getElementById('earwax-clinic-map');
+                if (!container) {
+                    console.error('Map container not found');
+                    return;
+                }
+
+                console.log('Initializing Earwax Clinic Network Map...');
+                isInitialized = true;
+
+                // Create map container
+                container.innerHTML = 
+                    '<div class="earwax-map-container">' +
+                        '<div class="loading-overlay">' +
+                            '<div class="loading-spinner"></div>' +
+                            '<div>Loading Qualified Practitioners...</div>' +
+                        '</div>' +
+                        '<div class="postcode-search-container">' +
+                            '<input type="text" placeholder="Enter postcode" maxlength="8" style="padding: 8px; border: 2px solid #00796B; border-radius: 6px; margin-right: 8px;">' +
+                            '<button onclick="searchPostcode()" style="padding: 8px 16px; background: #00796B; color: white; border: none; border-radius: 6px; cursor: pointer;">Find</button>' +
+                        '</div>' +
+                        '<div class="map-legend">' +
+                            '<div class="legend-title">Clinic Identifiers</div>' +
+                            '<div class="legend-item">' +
+                                '<span class="legend-marker virtual">V#</span>' +
+                                '<span>Verified Virtual Number</span>' +
+                            '</div>' +
+                            '<div class="legend-item">' +
+                                '<span class="legend-marker pending">####</span>' +
+                                '<span>Phone (Pending Virtual Number)</span>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="earwax-map" id="earwax-leaflet-map"></div>' +
+                    '</div>';
+
+                try {
+                    // Initialize Leaflet map
+                    mapInstance = L.map('earwax-leaflet-map', {
+                        zoomControl: true,
+                        scrollWheelZoom: true,
+                        doubleClickZoom: true,
+                        touchZoom: true
+                    }).setView([54.5, -3.0], 6); // UK center
+
+                    // Add tile layer
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap | Earwax Clinic Network',
+                        maxZoom: 18
+                    }).addTo(mapInstance);
+
+                    // Initialize marker cluster
+                    markerClusterGroup = L.markerClusterGroup({
+                        maxClusterRadius: 50,
+                        iconCreateFunction: function(cluster) {
+                            var childCount = cluster.getChildCount();
+                            return new L.DivIcon({ 
+                                html: '<div style="background: #00796B; color: white; border-radius: 50%; width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; font-weight: bold;">' + childCount + '</div>', 
+                                className: 'marker-cluster',
+                                iconSize: new L.Point(40, 40) 
+                            });
+                        }
+                    });
+                    mapInstance.addLayer(markerClusterGroup);
+
+                    // Load clinic data
+                    loadClinicData();
+                    
+                } catch (error) {
+                    console.error('Error initializing map:', error);
+                    showError('Failed to initialize map');
+                }
+            }
+
+            // Search postcode
+            window.searchPostcode = function() {
+                var input = document.querySelector('.postcode-search-container input');
+                var postcode = input.value.trim().toUpperCase();
+                
+                if (!postcode) {
+                    alert('Please enter a UK postcode');
+                    return;
+                }
+                
+                // Basic UK postcode validation
+                var postcodeRegex = /^[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}$/;
+                if (!postcodeRegex.test(postcode)) {
+                    alert('Please enter a valid UK postcode');
+                    return;
+                }
+                
+                // Use Nominatim for geocoding
+                var url = 'https://nominatim.openstreetmap.org/search?format=json&countrycodes=gb&postalcode=' + encodeURIComponent(postcode);
+                
+                fetch(url)
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (data && data.length > 0) {
+                            var lat = parseFloat(data[0].lat);
+                            var lon = parseFloat(data[0].lon);
+                            mapInstance.setView([lat, lon], 12);
+                            
+                            // Add temporary marker
+                            var searchMarker = L.marker([lat, lon])
+                                .addTo(mapInstance)
+                                .bindPopup('Search: ' + postcode)
+                                .openPopup();
+                            
+                            setTimeout(function() {
+                                mapInstance.removeLayer(searchMarker);
+                            }, 5000);
+                        } else {
+                            alert('Postcode not found');
+                        }
+                    })
+                    .catch(function(error) {
+                        console.error('Search error:', error);
+                        alert('Error searching postcode');
+                    });
+            };
+
+            // Load clinic data
+            function loadClinicData() {
+                console.log('Loading clinic data...');
+                
+                fetch(CSV_URL)
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('Failed to load data');
+                        return response.text();
+                    })
+                    .then(function(csvData) {
+                        var clinics = parseCSVData(csvData);
+                        console.log('Loaded', clinics.length, 'clinics');
+                        displayClinicsOnMap(clinics);
+                    })
+                    .catch(function(error) {
+                        console.error('Error loading data:', error);
+                        showError('Failed to load clinic data');
+                    });
+            }
+
+            // Parse CSV data
+            function parseCSVData(csvData) {
+                var lines = csvData.split('\n');
+                if (lines.length < 2) return [];
+
+                var headers = parseCSVLine(lines[0]);
+                console.log('Headers:', headers);
+
+                // Map headers to indices
+                var indices = {};
+                headers.forEach(function(header, index) {
+                    var clean = header.toLowerCase().trim().replace(/"/g, '');
+                    if (clean.includes('practitioner') && clean.includes('name')) indices.practitionerName = index;
+                    else if (clean.includes('practice') && clean.includes('name')) indices.practiceName = index;
+                    else if (clean.includes('practice') && clean.includes('number')) indices.practiceNumber = index;
+                    else if (clean.includes('virtual') && clean.includes('number')) indices.virtualNumber = index;
+                    else if (clean.includes('postcode')) indices.postcode = index;
+                    else if (clean.includes('occupation')) indices.occupation = index;
+                    else if (clean === 'registered') indices.registered = index;
+                    else if (clean.includes('registering') && clean.includes('body')) indices.registeringBody = index;
+                    else if (clean.includes('registered') && clean.includes('number')) indices.registeredNumber = index;
+                    else if (clean.includes('skills')) indices.skills = index;
+                    else if (clean.includes('opening') && clean.includes('times')) indices.openingTimes = index;
+                    else if (clean.includes('office') && clean.includes('email')) indices.email = index;
+                    else if (clean.includes('one') && clean.includes('ear')) indices.costOneEar = index;
+                    else if (clean.includes('two') && clean.includes('ear')) indices.costTwoEars = index;
+                    else if (clean === 'latitude') indices.latitude = index;
+                    else if (clean === 'longitude') indices.longitude = index;
+                    else if (clean === 'status') indices.status = index;
+                    else if (clean.includes('status') && clean.includes('note')) indices.statusNote = index;
+                });
+
+                var clinics = [];
+                for (var i = 1; i < lines.length; i++) {
+                    var line = lines[i].trim();
+                    if (!line) continue;
+
+                    var values = parseCSVLine(line);
+                    if (values.length < headers.length) continue;
+
+                    var clinic = {};
+                    Object.keys(indices).forEach(function(key) {
+                        var value = values[indices[key]] || '';
+                        clinic[key] = value.replace(/"/g, '').trim();
+                    });
+                    
+                    // Combine individual skills into a single skills string
+                    var skills = [];
+                    if (clinic.skillsLoupe === 'yes') skills.push('Loupe/O-Scope microsuction');
+                    if (clinic.skillsMicroscope === 'yes') skills.push('ENT Microscope');
+                    if (clinic.skillsEndoscopic === 'yes') skills.push('Endoscopic microsuction');
+                    if (clinic.skillsIrrigation === 'yes') skills.push('Water Irrigation');
+                    if (clinic.skillsManual === 'yes') skills.push('Manual removal');
+                    clinic.skills = skills.join(', ');
+
+                    // Parse coordinates
+                    if (clinic.latitude) clinic.latitude = parseFloat(clinic.latitude) || null;
+                    if (clinic.longitude) clinic.longitude = parseFloat(clinic.longitude) || null;
+
+                    // Check status - only include active clinics or those without status
+                    var clinicStatus = clinic.status ? clinic.status.toLowerCase() : 'active';
+                    
+                    // Only include if has name, coordinates, is not paused, and has insurance
+                    var hasInsurance = !clinic.professionalIndemnity || 
+                                      clinic.professionalIndemnity.toLowerCase() === 'yes' ||
+                                      clinic.professionalIndemnity === '';
+                    
+                    if (clinic.practiceName && clinic.latitude && clinic.longitude && 
+                        clinicStatus !== 'paused' && hasInsurance) {
+                        clinics.push(clinic);
+                    }
+                }
+
+                return clinics;
+            }
+
+            // Parse CSV line
+            function parseCSVLine(line) {
+                var result = [];
+                var current = '';
+                var inQuotes = false;
+                
+                for (var i = 0; i < line.length; i++) {
+                    var char = line[i];
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        result.push(current);
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                result.push(current);
+                return result;
+            }
+
+            // Display clinics on map
+            function displayClinicsOnMap(clinics) {
+                var successCount = 0;
+
+                clinics.forEach(function(clinic) {
+                    if (clinic.latitude && clinic.longitude) {
+                        addMarkerToMap(clinic);
+                        successCount++;
+                    }
+                });
+
+                console.log('Displayed', successCount, 'clinics on map');
+
+                if (markersArray.length > 0) {
+                    mapInstance.fitBounds(markerClusterGroup.getBounds().pad(0.1));
+                }
+
+                // Hide loading overlay
+                var overlay = document.querySelector('.loading-overlay');
+                if (overlay) {
+                    overlay.style.display = 'none';
+                }
+            }
+
+            // Add marker to map
+            function addMarkerToMap(clinic) {
+                // Determine what to display
+                var displayNumber = clinic.virtualNumber || 'P' + clinic.practiceNumber;
+                var hasVirtualNumber = clinic.virtualNumber && clinic.virtualNumber.trim() !== '';
+                
+                // Create custom icon
+                var iconHtml = hasVirtualNumber ?
+                    '<div class="virtual-number-marker">' + clinic.virtualNumber + '</div>' :
+                    '<div class="practice-number-marker">P' + clinic.practiceNumber + '</div>';
+                
+                var customIcon = L.divIcon({
+                    className: 'custom-marker',
+                    html: iconHtml,
+                    iconSize: hasVirtualNumber ? [32, 32] : [28, 28],
+                    iconAnchor: hasVirtualNumber ? [16, 16] : [14, 14],
+                    popupAnchor: [0, hasVirtualNumber ? -16 : -14]
+                });
+
+                var marker = L.marker([clinic.latitude, clinic.longitude], { icon: customIcon });
+
+                // Create popup content
+                var popupContent = createPopupContent(clinic, hasVirtualNumber);
+                marker.bindPopup(popupContent, {
+                    maxWidth: 350,
+                    className: 'earwax-popup'
+                });
+
+                markerClusterGroup.addLayer(marker);
+                markersArray.push(marker);
+            }
+
+            // Create popup content
+            function createPopupContent(clinic, hasVirtualNumber) {
+                var html = '<div class="popup-header">' +
+                    '<h3>' + escapeHtml(clinic.practiceName) + 
+                    (hasVirtualNumber ? '<span class="popup-virtual-number">V' + clinic.virtualNumber + '</span>' : '') +
+                    '</h3></div><div class="popup-body">';
+
+                // Practitioner info
+                html += '<div class="popup-section">';
+                html += '<div class="popup-label">Practitioner</div>';
+                html += '<div>' + escapeHtml(clinic.practitionerName) + '</div>';
+                html += '<div style="color: #757575; font-size: 13px;">' + escapeHtml(clinic.occupation) + '</div>';
+                
+                if (clinic.registered === 'Yes' && clinic.registeringBody) {
+                    html += '<div class="registration-badge">✓ ' + escapeHtml(clinic.registeringBody) + 
+                            (clinic.registeredNumber ? ' #' + escapeHtml(clinic.registeredNumber) : '') + '</div>';
+                }
+                html += '</div>';
+
+                // Skills
+                if (clinic.skills) {
+                    html += '<div class="popup-section">';
+                    html += '<div class="popup-label">Services</div>';
+                    html += '<div class="skills-list">';
+                    clinic.skills.split(',').forEach(function(skill) {
+                        html += '<span class="skill-tag">' + escapeHtml(skill.trim()) + '</span>';
+                    });
+                    html += '</div></div>';
+                }
+
+                // Pricing
+                if (clinic.costOneEar || clinic.costTwoEars) {
+                    html += '<div class="popup-section">';
+                    html += '<div class="popup-label">Pricing</div>';
+                    html += '<div class="pricing-info">';
+                    if (clinic.costOneEar) {
+                        html += '<div class="price-item"><span>One Ear:</span><span class="price-value">£' + escapeHtml(clinic.costOneEar) + '</span></div>';
+                    }
+                    if (clinic.costTwoEars) {
+                        html += '<div class="price-item"><span>Two Ears:</span><span class="price-value">£' + escapeHtml(clinic.costTwoEars) + '</span></div>';
+                    }
+                    html += '</div></div>';
+                }
+
+                // Opening times
+                if (clinic.openingTimes) {
+                    html += '<div class="popup-section">';
+                    html += '<div class="popup-label">Opening Times</div>';
+                    html += '<div>' + escapeHtml(clinic.openingTimes) + '</div>';
+                    html += '</div>';
+                }
+
+                // Contact
+                if (clinic.email) {
+                    html += '<div class="popup-section">';
+                    html += '<a href="mailto:' + escapeHtml(clinic.email) + '" class="contact-button">Contact Clinic</a>';
+                    html += '</div>';
+                }
+
+                html += '</div>';
+                return html;
+            }
+
+            // Escape HTML
+            function escapeHtml(text) {
+                var div = document.createElement('div');
+                div.textContent = text || '';
+                return div.innerHTML;
+            }
+
+            // Show error
+            function showError(message) {
+                var container = document.querySelector('.earwax-map-container');
+                if (container) {
+                    container.innerHTML = '<div style="padding: 40px; text-align: center; color: #B71C1C;">' +
+                        '<h3>Error</h3><p>' + message + '</p></div>';
+                }
+            }
+
+            // Initialize on load
+            waitForDependencies(function() {
+                try {
+                    initEarwaxMap();
+                } catch (error) {
+                    console.error('Initialization error:', error);
+                    showError('Failed to initialize map');
+                }
+            });
+
+        })(window, document);
+    </script>
+</body>
+</html>
