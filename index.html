@@ -31,6 +31,7 @@
             border: 2px solid var(--primary-color);
             font-family: 'Inter', sans-serif;
             position: relative;
+            margin: 0 auto;
         }
 
         .earwax-map {
@@ -75,32 +76,38 @@
         /* Search Box Styling */
         .postcode-search-container {
             position: absolute;
-            top: 15px;
-            right: 15px;
+            top: 10px;
+            right: 10px;
             z-index: 1000;
             background: rgba(255, 255, 255, 0.95);
-            padding: 12px;
-            border-radius: 10px;
+            padding: 8px;
+            border-radius: 8px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
             border: 2px solid var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
         .search-input {
-            padding: 8px;
-            border: 2px solid #00796B;
-            border-radius: 6px;
-            margin-right: 8px;
-            font-size: 14px;
+            padding: 6px 8px;
+            border: 1px solid #00796B;
+            border-radius: 4px;
+            font-size: 12px;
+            width: 120px;
+            box-sizing: border-box;
         }
 
         .search-button {
-            padding: 8px 16px;
+            padding: 6px 10px;
             background: #00796B;
             color: white;
             border: none;
-            border-radius: 6px;
+            border-radius: 4px;
             cursor: pointer;
             font-weight: 500;
+            font-size: 12px;
+            white-space: nowrap;
         }
 
         .search-button:hover {
@@ -249,16 +256,49 @@
         /* Mobile responsive */
         @media (max-width: 768px) {
             .earwax-map-container {
-                height: 500px;
+                height: calc(100vh - 40px);
+                margin: 20px 15px;
+                border-radius: 8px;
+            }
+
+            .postcode-search-container {
+                top: 8px;
+                right: 8px;
+                padding: 6px;
+                border-radius: 6px;
+            }
+
+            .search-input {
+                width: 90px;
+                padding: 5px 6px;
+                font-size: 11px;
+            }
+
+            .search-button {
+                padding: 5px 8px;
+                font-size: 11px;
             }
 
             .leaflet-popup-content-wrapper {
-                max-width: 280px !important;
-                min-width: 250px;
+                max-width: 260px !important;
+                min-width: 240px;
             }
 
             .popup-header h3 {
-                font-size: 16px;
+                font-size: 15px;
+            }
+
+            .popup-body {
+                padding: 12px;
+            }
+
+            .popup-label {
+                font-size: 11px;
+            }
+
+            .skill-tag {
+                font-size: 11px;
+                padding: 3px 6px;
             }
 
             /* Ensure popup stays visible on mobile */
@@ -268,12 +308,13 @@
 
             .leaflet-popup-content {
                 touch-action: pan-y;
+                font-size: 13px;
             }
 
             /* Make sure close button is accessible on mobile */
             .leaflet-popup-close-button {
-                font-size: 20px;
-                padding: 8px;
+                font-size: 18px;
+                padding: 6px;
                 line-height: 1;
                 width: auto;
                 height: auto;
@@ -619,7 +660,9 @@
                     autoClose: false,
                     closeButton: true,
                     autoPan: true,
-                    keepInView: true
+                    autoPanPadding: [20, 20],
+                    keepInView: true,
+                    maxHeight: 400
                 });
 
                 markerClusterGroup.addLayer(marker);
