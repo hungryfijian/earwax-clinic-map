@@ -378,14 +378,14 @@
                     alert('Please enter a valid UK postcode (e.g., L1, SW1A, M1 5)');
                     return;
                 }
-                
+
                 // Add space if it's a full postcode without space
                 if (postcode.length >= 5 && !postcode.includes(' ')) {
                     postcode = postcode.slice(0, -3) + ' ' + postcode.slice(-3);
                 }
-                
-                // Use Nominatim for geocoding
-                var url = 'https://nominatim.openstreetmap.org/search?format=json&countrycodes=gb&postalcode=' + encodeURIComponent(postcode);
+
+                // Use Nominatim for geocoding with q parameter for better partial matching
+                var url = 'https://nominatim.openstreetmap.org/search?format=json&countrycodes=gb&q=' + encodeURIComponent(postcode + ', UK');
                 
                 fetch(url)
                     .then(function(response) { return response.json(); })
@@ -405,7 +405,7 @@
                                 mapInstance.removeLayer(searchMarker);
                             }, 5000);
                         } else {
-                            alert('Postcode not found. Try the first part only (e.g., L1 instead of L1 9AS)');
+                            alert('Postcode not found. Please check the postcode and try again.');
                         }
                     })
                     .catch(function(error) {
@@ -459,8 +459,8 @@
                     else if (clean.includes('registered') && clean.includes('number')) indices.registeredNumber = index;
                     else if (clean.includes('opening') && clean.includes('times')) indices.openingTimes = index;
                     else if (clean.includes('office') && clean.includes('email')) indices.email = index;
-                    else if (clean.includes('cost one ear') && clean.includes('pounds')) indices.costOneEar = index;
-                    else if (clean.includes('cost two ears') && clean.includes('00')) indices.costTwoEars = index;
+                    else if (clean.includes('cost') && clean.includes('one') && clean.includes('ear') && clean.includes('pounds')) indices.costOneEar = index;
+                    else if (clean.includes('cost') && clean.includes('two') && clean.includes('ears') && clean.includes('pounds')) indices.costTwoEars = index;
                     else if (clean === 'latitude') indices.latitude = index;
                     else if (clean === 'longitude') indices.longitude = index;
                     else if (clean === 'status') indices.status = index;
@@ -612,8 +612,8 @@
                 html += '<div style="color: #757575; font-size: 13px;">' + escapeHtml(clinic.occupation) + '</div>';
                 
                 if (clinic.registered === 'Yes' && clinic.registeringBody) {
-                    html += '<div class="registration-badge">✓ ' + escapeHtml(clinic.registeringBody) + 
-                            (clinic.registeredNumber ? ' #' + escapeHtml(clinic.registeredNumber) : '') + '</div>';
+                    html += '<div class="registration-badge">✅ Registered with ' + escapeHtml(clinic.registeringBody) +
+                            (clinic.registeredNumber ? ' • #' + escapeHtml(clinic.registeredNumber) : '') + '</div>';
                 }
                 html += '</div>';
 
