@@ -318,7 +318,7 @@
                             '<div>Loading Qualified Practitioners...</div>' +
                         '</div>' +
                         '<div class="postcode-search-container">' +
-                            '<input type="text" class="search-input" placeholder="Enter postcode (e.g. L1)" maxlength="8">' +
+                            '<input type="text" class="search-input" placeholder="Enter full postcode (e.g. L1 9AS)" maxlength="8">' +
                             '<button class="search-button" onclick="searchPostcode()">Find Nearby</button>' +
                         '</div>' +
                         '<div class="earwax-map" id="earwax-leaflet-map"></div>' +
@@ -372,10 +372,10 @@
                     return;
                 }
                 
-                // More flexible postcode validation - allow partial postcodes
-                var partialPostcodeRegex = /^[A-Z]{1,2}[0-9][A-Z0-9]?/;
-                if (!partialPostcodeRegex.test(postcode)) {
-                    alert('Please enter a valid UK postcode (e.g., L1, SW1A, M1 5)');
+                // Validate full UK postcode format
+                var fullPostcodeRegex = /^[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}$/;
+                if (!fullPostcodeRegex.test(postcode)) {
+                    alert('Please enter a complete UK postcode (e.g., L1 9AS, SW1A 2AA, M1 5BD)');
                     return;
                 }
 
@@ -405,7 +405,7 @@
                                 mapInstance.removeLayer(searchMarker);
                             }, 5000);
                         } else {
-                            alert('Postcode not found. Please check the postcode and try again.');
+                            alert('Postcode not found. Please check you entered the complete postcode correctly.');
                         }
                     })
                     .catch(function(error) {
@@ -657,10 +657,10 @@
                 // Contact - Show phone number prominently
                 html += '<div class="popup-section">';
 
-                // Display the phone number only
+                // Display the phone number as clickable link
                 var phoneToDisplay = clinic.virtualNumber || clinic.practiceNumber || '';
                 if (phoneToDisplay) {
-                    html += '<div class="phone-number">📞 ' + escapeHtml(phoneToDisplay) + '</div>';
+                    html += '<a href="tel:' + phoneToDisplay.replace(/\s/g, '') + '" class="phone-number" style="text-decoration: none; display: block; color: #00796B;">📞 ' + escapeHtml(phoneToDisplay) + '</a>';
                 }
 
                 html += '</div>';
