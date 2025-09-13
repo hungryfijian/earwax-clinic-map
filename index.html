@@ -85,34 +85,36 @@
             border: 2px solid var(--primary-color);
         }
 
-        /* Virtual Number Marker */
-        .virtual-number-marker {
-            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
-            color: white;
-            border-radius: 50%;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
+        .search-input {
+            padding: 8px;
+            border: 2px solid #00796B;
+            border-radius: 6px;
+            margin-right: 8px;
             font-size: 14px;
-            border: 3px solid white;
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
         }
 
-        .practice-number-marker {
-            background: linear-gradient(135deg, #757575 0%, #424242 100%);
+        .search-button {
+            padding: 8px 16px;
+            background: #00796B;
             color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .search-button:hover {
+            background: #004D40;
+        }
+
+        /* Simple marker dot - no text */
+        .clinic-marker {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
             border-radius: 50%;
-            width: 28px;
-            height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            border: 2px solid white;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            width: 20px;
+            height: 20px;
+            border: 3px solid white;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
         }
 
         /* Enhanced Popup Styling */
@@ -145,17 +147,6 @@
             font-family: 'Poppins', sans-serif;
             font-size: 18px;
             font-weight: 600;
-        }
-
-        .popup-virtual-number {
-            display: inline-block;
-            background: white;
-            color: var(--primary-color);
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-left: 10px;
         }
 
         .popup-body {
@@ -231,76 +222,34 @@
         .contact-button {
             display: inline-block;
             background: var(--primary-color);
-            color: white;
-            padding: 8px 16px;
+            color: white !important;
+            padding: 10px 20px;
             border-radius: 6px;
             text-decoration: none;
-            font-weight: 500;
+            font-weight: 600;
             margin-top: 8px;
             transition: background 0.3s ease;
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
         }
 
         .contact-button:hover {
             background: var(--secondary-color);
+            color: white !important;
         }
 
-        /* Legend */
-        .map-legend {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.95);
-            padding: 12px;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-            z-index: 1000;
-            font-size: 12px;
-        }
-
-        .legend-title {
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: var(--secondary-color);
-        }
-
-        .legend-item {
-            display: flex;
-            align-items: center;
-            margin: 4px 0;
-        }
-
-        .legend-marker {
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            margin-right: 8px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 10px;
+        .phone-number {
+            font-size: 16px;
             font-weight: bold;
-        }
-
-        .legend-marker.virtual {
-            background: linear-gradient(135deg, var(--primary-color) 0%, var(--accent-color) 100%);
-        }
-
-        .legend-marker.pending {
-            background: linear-gradient(135deg, #757575 0%, #424242 100%);
+            color: var(--primary-color);
+            margin: 8px 0;
         }
 
         /* Mobile responsive */
         @media (max-width: 768px) {
             .earwax-map-container {
                 height: 500px;
-            }
-
-            .map-legend {
-                bottom: 10px;
-                left: 10px;
-                padding: 8px;
-                font-size: 11px;
             }
 
             .leaflet-popup-content-wrapper {
@@ -369,19 +318,8 @@
                             '<div>Loading Qualified Practitioners...</div>' +
                         '</div>' +
                         '<div class="postcode-search-container">' +
-                            '<input type="text" placeholder="Enter postcode" maxlength="8" style="padding: 8px; border: 2px solid #00796B; border-radius: 6px; margin-right: 8px;">' +
-                            '<button onclick="searchPostcode()" style="padding: 8px 16px; background: #00796B; color: white; border: none; border-radius: 6px; cursor: pointer;">Find</button>' +
-                        '</div>' +
-                        '<div class="map-legend">' +
-                            '<div class="legend-title">Clinic Identifiers</div>' +
-                            '<div class="legend-item">' +
-                                '<span class="legend-marker virtual">V#</span>' +
-                                '<span>Verified Virtual Number</span>' +
-                            '</div>' +
-                            '<div class="legend-item">' +
-                                '<span class="legend-marker pending">####</span>' +
-                                '<span>Phone (Pending Virtual Number)</span>' +
-                            '</div>' +
+                            '<input type="text" class="search-input" placeholder="Enter postcode (e.g. L1)" maxlength="8">' +
+                            '<button class="search-button" onclick="searchPostcode()">Find Nearby</button>' +
                         '</div>' +
                         '<div class="earwax-map" id="earwax-leaflet-map"></div>' +
                     '</div>';
@@ -424,21 +362,26 @@
                 }
             }
 
-            // Search postcode
+            // Search postcode - updated to handle partial postcodes
             window.searchPostcode = function() {
                 var input = document.querySelector('.postcode-search-container input');
                 var postcode = input.value.trim().toUpperCase();
                 
                 if (!postcode) {
-                    alert('Please enter a UK postcode');
+                    alert('Please enter a postcode');
                     return;
                 }
                 
-                // Basic UK postcode validation
-                var postcodeRegex = /^[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}$/;
-                if (!postcodeRegex.test(postcode)) {
-                    alert('Please enter a valid UK postcode');
+                // More flexible postcode validation - allow partial postcodes
+                var partialPostcodeRegex = /^[A-Z]{1,2}[0-9][A-Z0-9]?/;
+                if (!partialPostcodeRegex.test(postcode)) {
+                    alert('Please enter a valid UK postcode (e.g., L1, SW1A, M1 5)');
                     return;
+                }
+                
+                // Add space if it's a full postcode without space
+                if (postcode.length >= 5 && !postcode.includes(' ')) {
+                    postcode = postcode.slice(0, -3) + ' ' + postcode.slice(-3);
                 }
                 
                 // Use Nominatim for geocoding
@@ -455,14 +398,14 @@
                             // Add temporary marker
                             var searchMarker = L.marker([lat, lon])
                                 .addTo(mapInstance)
-                                .bindPopup('Search: ' + postcode)
+                                .bindPopup('Search area: ' + postcode)
                                 .openPopup();
                             
                             setTimeout(function() {
                                 mapInstance.removeLayer(searchMarker);
                             }, 5000);
                         } else {
-                            alert('Postcode not found');
+                            alert('Postcode not found. Try the first part only (e.g., L1 instead of L1 9AS)');
                         }
                     })
                     .catch(function(error) {
@@ -536,15 +479,6 @@
                         var value = values[indices[key]] || '';
                         clinic[key] = value.replace(/"/g, '').trim();
                     });
-                    
-                    // Combine individual skills into a single skills string
-                    var skills = [];
-                    if (clinic.skillsLoupe === 'yes') skills.push('Loupe/O-Scope microsuction');
-                    if (clinic.skillsMicroscope === 'yes') skills.push('ENT Microscope');
-                    if (clinic.skillsEndoscopic === 'yes') skills.push('Endoscopic microsuction');
-                    if (clinic.skillsIrrigation === 'yes') skills.push('Water Irrigation');
-                    if (clinic.skillsManual === 'yes') skills.push('Manual removal');
-                    clinic.skills = skills.join(', ');
 
                     // Parse coordinates
                     if (clinic.latitude) clinic.latitude = parseFloat(clinic.latitude) || null;
@@ -553,13 +487,9 @@
                     // Check status - only include active clinics or those without status
                     var clinicStatus = clinic.status ? clinic.status.toLowerCase() : 'active';
                     
-                    // Only include if has name, coordinates, is not paused, and has insurance
-                    var hasInsurance = !clinic.professionalIndemnity || 
-                                      clinic.professionalIndemnity.toLowerCase() === 'yes' ||
-                                      clinic.professionalIndemnity === '';
-                    
+                    // Only include if has name, coordinates, and is not paused
                     if (clinic.practiceName && clinic.latitude && clinic.longitude && 
-                        clinicStatus !== 'paused' && hasInsurance) {
+                        clinicStatus !== 'paused') {
                         clinics.push(clinic);
                     }
                 }
@@ -612,29 +542,23 @@
                 }
             }
 
-            // Add marker to map
+            // Add marker to map - simplified
             function addMarkerToMap(clinic) {
-                // Determine what to display
-                var displayNumber = clinic.virtualNumber || 'P' + clinic.practiceNumber;
-                var hasVirtualNumber = clinic.virtualNumber && clinic.virtualNumber.trim() !== '';
-                
-                // Create custom icon
-                var iconHtml = hasVirtualNumber ?
-                    '<div class="virtual-number-marker">' + clinic.virtualNumber + '</div>' :
-                    '<div class="practice-number-marker">P' + clinic.practiceNumber + '</div>';
+                // Create simple dot marker
+                var iconHtml = '<div class="clinic-marker"></div>';
                 
                 var customIcon = L.divIcon({
                     className: 'custom-marker',
                     html: iconHtml,
-                    iconSize: hasVirtualNumber ? [32, 32] : [28, 28],
-                    iconAnchor: hasVirtualNumber ? [16, 16] : [14, 14],
-                    popupAnchor: [0, hasVirtualNumber ? -16 : -14]
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10],
+                    popupAnchor: [0, -10]
                 });
 
                 var marker = L.marker([clinic.latitude, clinic.longitude], { icon: customIcon });
 
                 // Create popup content
-                var popupContent = createPopupContent(clinic, hasVirtualNumber);
+                var popupContent = createPopupContent(clinic);
                 marker.bindPopup(popupContent, {
                     maxWidth: 350,
                     className: 'earwax-popup'
@@ -644,12 +568,11 @@
                 markersArray.push(marker);
             }
 
-            // Create popup content
-            function createPopupContent(clinic, hasVirtualNumber) {
+            // Create popup content - updated
+            function createPopupContent(clinic) {
                 var html = '<div class="popup-header">' +
-                    '<h3>' + escapeHtml(clinic.practiceName) + 
-                    (hasVirtualNumber ? '<span class="popup-virtual-number">V' + clinic.virtualNumber + '</span>' : '') +
-                    '</h3></div><div class="popup-body">';
+                    '<h3>' + escapeHtml(clinic.practiceName) + '</h3>' +
+                    '</div><div class="popup-body">';
 
                 // Practitioner info
                 html += '<div class="popup-section">';
@@ -674,15 +597,16 @@
                     html += '</div></div>';
                 }
 
-                // Pricing
-                if (clinic.costOneEar || clinic.costTwoEars) {
+                // Pricing - only show if prices exist
+                if ((clinic.costOneEar && clinic.costOneEar !== '0' && clinic.costOneEar !== '00') || 
+                    (clinic.costTwoEars && clinic.costTwoEars !== '0' && clinic.costTwoEars !== '00')) {
                     html += '<div class="popup-section">';
                     html += '<div class="popup-label">Pricing</div>';
                     html += '<div class="pricing-info">';
-                    if (clinic.costOneEar) {
+                    if (clinic.costOneEar && clinic.costOneEar !== '0' && clinic.costOneEar !== '00') {
                         html += '<div class="price-item"><span>One Ear:</span><span class="price-value">£' + escapeHtml(clinic.costOneEar) + '</span></div>';
                     }
-                    if (clinic.costTwoEars) {
+                    if (clinic.costTwoEars && clinic.costTwoEars !== '0' && clinic.costTwoEars !== '00') {
                         html += '<div class="price-item"><span>Two Ears:</span><span class="price-value">£' + escapeHtml(clinic.costTwoEars) + '</span></div>';
                     }
                     html += '</div></div>';
@@ -696,12 +620,21 @@
                     html += '</div>';
                 }
 
-                // Contact
-                if (clinic.email) {
-                    html += '<div class="popup-section">';
-                    html += '<a href="mailto:' + escapeHtml(clinic.email) + '" class="contact-button">Contact Clinic</a>';
-                    html += '</div>';
+                // Contact - Show phone number prominently
+                html += '<div class="popup-section">';
+                
+                // Display the phone number
+                var phoneToDisplay = clinic.virtualNumber || clinic.practiceNumber || '';
+                if (phoneToDisplay) {
+                    html += '<div class="phone-number">📞 ' + escapeHtml(phoneToDisplay) + '</div>';
                 }
+                
+                // Email contact button if available
+                if (clinic.email) {
+                    html += '<a href="mailto:' + escapeHtml(clinic.email) + '?subject=Earwax%20Removal%20Enquiry" class="contact-button">📧 Email Clinic</a>';
+                }
+                
+                html += '</div>';
 
                 html += '</div>';
                 return html;
