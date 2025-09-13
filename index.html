@@ -444,6 +444,8 @@
 
                 // Map headers to indices
                 var indices = {};
+                var skillColumns = {};
+
                 headers.forEach(function(header, index) {
                     var clean = header.toLowerCase().trim().replace(/"/g, '');
                     if (clean.includes('practitioner') && clean.includes('name')) indices.practitionerName = index;
@@ -455,16 +457,32 @@
                     else if (clean === 'registered') indices.registered = index;
                     else if (clean.includes('registering') && clean.includes('body')) indices.registeringBody = index;
                     else if (clean.includes('registered') && clean.includes('number')) indices.registeredNumber = index;
-                    else if (clean.includes('skills')) indices.skills = index;
                     else if (clean.includes('opening') && clean.includes('times')) indices.openingTimes = index;
                     else if (clean.includes('office') && clean.includes('email')) indices.email = index;
-                    else if (clean.includes('one') && clean.includes('ear')) indices.costOneEar = index;
-                    else if (clean.includes('two') && clean.includes('ear')) indices.costTwoEars = index;
+                    else if (clean.includes('cost one ear') && clean.includes('pounds')) indices.costOneEar = index;
+                    else if (clean.includes('cost two ears') && clean.includes('00')) indices.costTwoEars = index;
                     else if (clean === 'latitude') indices.latitude = index;
                     else if (clean === 'longitude') indices.longitude = index;
                     else if (clean === 'status') indices.status = index;
                     else if (clean.includes('status') && clean.includes('note')) indices.statusNote = index;
+                    // Map skill columns
+                    else if (clean.includes('skills-')) {
+                        var skillName = clean.replace('skills-', '');
+                        if (skillName.includes('loupe') || skillName.includes('o-scope')) {
+                            skillColumns['loupe'] = { index: index, name: 'Loupe/O-Scope microsuction' };
+                        } else if (skillName.includes('ent') && skillName.includes('microscope')) {
+                            skillColumns['microscope'] = { index: index, name: 'ENT Microscope microsuction' };
+                        } else if (skillName.includes('endoscopic')) {
+                            skillColumns['endoscopic'] = { index: index, name: 'Endoscopic microsuction' };
+                        } else if (skillName.includes('water') && skillName.includes('irrigation')) {
+                            skillColumns['irrigation'] = { index: index, name: 'Water Irrigation' };
+                        } else if (skillName.includes('manual') && skillName.includes('removal')) {
+                            skillColumns['manual'] = { index: index, name: 'Manual removal (curettes)' };
+                        }
+                    }
                 });
+
+                indices.skillColumns = skillColumns;
 
                 var clinics = [];
                 for (var i = 1; i < lines.length; i++) {
@@ -476,9 +494,22 @@
 
                     var clinic = {};
                     Object.keys(indices).forEach(function(key) {
+                        if (key === 'skillColumns') return; // Skip this special key
                         var value = values[indices[key]] || '';
                         clinic[key] = value.replace(/"/g, '').trim();
                     });
+
+                    // Process skills from individual columns
+                    var skillsList = [];
+                    Object.keys(indices.skillColumns).forEach(function(skillKey) {
+                        var skillInfo = indices.skillColumns[skillKey];
+                        var skillValue = values[skillInfo.index] || '';
+                        skillValue = skillValue.replace(/"/g, '').trim().toLowerCase();
+                        if (skillValue === 'yes') {
+                            skillsList.push(skillInfo.name);
+                        }
+                    });
+                    clinic.skills = skillsList.join(', ');
 
                     // Parse coordinates
                     if (clinic.latitude) clinic.latitude = parseFloat(clinic.latitude) || null;
@@ -587,12 +618,15 @@
                 html += '</div>';
 
                 // Skills
-                if (clinic.skills) {
+                if (clinic.skills && clinic.skills.length > 0) {
                     html += '<div class="popup-section">';
-                    html += '<div class="popup-label">Services</div>';
+                    html += '<div class="popup-label">Services Offered</div>';
                     html += '<div class="skills-list">';
                     clinic.skills.split(',').forEach(function(skill) {
-                        html += '<span class="skill-tag">' + escapeHtml(skill.trim()) + '</span>';
+                        var trimmedSkill = skill.trim();
+                        if (trimmedSkill) {
+                            html += '<span class="skill-tag">' + escapeHtml(trimmedSkill) + '</span>';
+                        }
                     });
                     html += '</div></div>';
                 }
@@ -622,18 +656,13 @@
 
                 // Contact - Show phone number prominently
                 html += '<div class="popup-section">';
-                
-                // Display the phone number
+
+                // Display the phone number only
                 var phoneToDisplay = clinic.virtualNumber || clinic.practiceNumber || '';
                 if (phoneToDisplay) {
                     html += '<div class="phone-number">📞 ' + escapeHtml(phoneToDisplay) + '</div>';
                 }
-                
-                // Email contact button if available
-                if (clinic.email) {
-                    html += '<a href="mailto:' + escapeHtml(clinic.email) + '?subject=Earwax%20Removal%20Enquiry" class="contact-button">📧 Email Clinic</a>';
-                }
-                
+
                 html += '</div>';
 
                 html += '</div>';
