@@ -253,6 +253,27 @@
             margin: 8px 0;
         }
 
+        .paused-notice {
+            background: linear-gradient(135deg, #FFF8E1 0%, #FFECB3 100%);
+            border: 2px solid #FF8F00;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0;
+            color: #E65100;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .pause-reason {
+            background: #FFF3E0;
+            padding: 8px;
+            border-radius: 6px;
+            margin-top: 8px;
+            font-size: 13px;
+            color: #BF360C;
+            border-left: 4px solid #FF6D00;
+        }
+
         /* Mobile responsive */
         @media (max-width: 768px) {
             .earwax-map-container {
@@ -528,6 +549,7 @@
                     else if (clean === 'longitude') indices.longitude = index;
                     else if (clean === 'status') indices.status = index;
                     else if (clean.includes('status') && clean.includes('note')) indices.statusNote = index;
+                    else if (clean.includes('resume') && clean.includes('date')) indices.resumeDate = index;
                     // Map skill columns
                     else if (clean.includes('skills-')) {
                         var skillName = clean.replace('skills-', '');
@@ -577,6 +599,9 @@
                     // Parse coordinates
                     if (clinic.latitude) clinic.latitude = parseFloat(clinic.latitude) || null;
                     if (clinic.longitude) clinic.longitude = parseFloat(clinic.longitude) || null;
+
+                    // Set default status if not specified
+                    if (!clinic.status) clinic.status = 'Active';
 
                     // Check status - only include active clinics or those without status
                     var clinicStatus = clinic.status ? clinic.status.toLowerCase() : 'active';
@@ -701,9 +726,10 @@
                     html += '</div></div>';
                 }
 
-                // Pricing - only show if prices exist
-                if ((clinic.costOneEar && clinic.costOneEar !== '0' && clinic.costOneEar !== '00') || 
-                    (clinic.costTwoEars && clinic.costTwoEars !== '0' && clinic.costTwoEars !== '00')) {
+                // Pricing - only show if clinic is active and prices exist
+                if ((!clinic.status || clinic.status.toLowerCase() !== 'paused') &&
+                    ((clinic.costOneEar && clinic.costOneEar !== '0' && clinic.costOneEar !== '00') ||
+                     (clinic.costTwoEars && clinic.costTwoEars !== '0' && clinic.costTwoEars !== '00'))) {
                     html += '<div class="popup-section">';
                     html += '<div class="popup-label">Pricing</div>';
                     html += '<div class="pricing-info">';
@@ -724,13 +750,28 @@
                     html += '</div>';
                 }
 
-                // Contact - Show phone number prominently
+                // Contact section - check if clinic is paused
                 html += '<div class="popup-section">';
 
-                // Display the phone number as clickable link
-                var phoneToDisplay = clinic.virtualNumber || clinic.practiceNumber || '';
-                if (phoneToDisplay) {
-                    html += '<a href="tel:' + phoneToDisplay.replace(/\s/g, '') + '" class="phone-number" style="text-decoration: none; display: block; color: #00796B;">📞 ' + escapeHtml(phoneToDisplay) + '</a>';
+                if (clinic.status && clinic.status.toLowerCase() === 'paused') {
+                    html += '<div class="paused-notice">';
+                    html += '⚠️ Currently Not Taking Bookings';
+                    html += '</div>';
+
+                    if (clinic.statusNote) {
+                        html += '<div class="pause-reason">';
+                        html += '<strong>Reason:</strong> ' + escapeHtml(clinic.statusNote);
+                        if (clinic.resumeDate) {
+                            html += '<br><strong>Expected Resume:</strong> ' + escapeHtml(clinic.resumeDate);
+                        }
+                        html += '</div>';
+                    }
+                } else {
+                    // Display the phone number as clickable link for active clinics
+                    var phoneToDisplay = clinic.virtualNumber || clinic.practiceNumber || '';
+                    if (phoneToDisplay) {
+                        html += '<a href="tel:' + phoneToDisplay.replace(/\s/g, '') + '" class="phone-number" style="text-decoration: none; display: block; color: #00796B;">📞 ' + escapeHtml(phoneToDisplay) + '</a>';
+                    }
                 }
 
                 html += '</div>';
