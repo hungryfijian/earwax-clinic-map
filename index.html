@@ -606,9 +606,9 @@
                     // Check status - only include active clinics or those without status
                     var clinicStatus = clinic.status ? clinic.status.toLowerCase() : 'active';
                     
-                    // Only include if has name, coordinates, and is not paused
-                    if (clinic.practiceName && clinic.latitude && clinic.longitude && 
-                        clinicStatus !== 'paused') {
+                    // Only include if has name, coordinates, and is not paused or deleted
+                    if (clinic.practiceName && clinic.latitude && clinic.longitude &&
+                        clinicStatus !== 'paused' && clinicStatus !== 'deleted') {
                         clinics.push(clinic);
                     }
                 }
