@@ -1,0 +1,2942 @@
+/**
+ * Enhanced Earwax Clinic Network Google Apps Script
+ * Features: Geocoding, Admin Notifications, Welcome Emails, Virtual Number Management
+ * Auto-runs daily at 2am for geocoding, checks for new entries every hour
+ */
+
+// Configuration
+const SHEET_NAME = 'Form responses'; // Single sheet for all data
+const ADMIN_EMAIL = 'nandslab@gmail.com'; // Change to actual admin email
+const REPLY_TO_EMAIL = 'pnand@thehearinglab.co.uk'; // Reply-to address for all emails
+const UPDATE_REQUEST_EMAIL = 'nandslab@gmail.com'; // For update requests
+
+// Virtual Number Assignment System Configuration
+const JASPER_SHEET_ID = '16OMsnbmJfy7p2mZgf3EcaA_PaP8CzainMKinzHm6RD4'; // Will be populated after running initializeVirtualNumberSheet()
+const JASPER_EMAIL = 'Jaspericcom@me.com';
+const PAUL_EMAIL = 'pnand@thehearinglab.co.uk';
+
+// Main geocoding function (runs at 2am)
+function geocodeEarwaxClinics() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+  
+  if (!sheet) {
+    console.error(`Sheet "${SHEET_NAME}" not found`);
+    return;
+  }
+  
+  const data = sheet.getDataRange().getValues();
+  
+  if (data.length < 2) {
+    console.log('No data rows to process');
+    return;
+  }
+  
+  const headers = data[0];
+  console.log('Processing sheet with headers:', headers);
+  
+  // Find column indices - UPDATED TO USE 'Practice Phone Number'
+  const columnIndices = {
+    practiceName: findColumnIndex(headers, 'Practice Name'),
+    practiceNumber: findColumnIndex(headers, 'Practice Phone Number'), // CHANGED
+    practicePostcode: findColumnIndex(headers, 'Practice Postcode'),
+    practitionerName: findColumnIndex(headers, 'Practitioner Name'),
+    officeEmail: findColumnIndex(headers, 'Office Email'),
+    virtualNumber: findColumnIndex(headers, 'Virtual Number'),
+    latitude: findColumnIndex(headers, 'Latitude'),
+    longitude: findColumnIndex(headers, 'Longitude')
+  };
+  
+  // Check if coordinate columns exist, if not create them
+  if (columnIndices.latitude === -1) {
+    sheet.insertColumnAfter(headers.length);
+    columnIndices.latitude = headers.length;
+    sheet.getRange(1, columnIndices.latitude + 1).setValue('Latitude');
+  }
+  
+  if (columnIndices.longitude === -1) {
+    sheet.insertColumnAfter(headers.length);
+    columnIndices.longitude = headers.length;
+    sheet.getRange(1, columnIndices.longitude + 1).setValue('Longitude');
+  }
+  
+  let newEntries = 0;
+  let successful = 0;
+  let failed = 0;
+  const failedAddresses = [];
+  
+  // Process each row for geocoding
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    
+    // Skip if no insurance
+    if (row[columnIndices.professionalIndemnity] && 
+        row[columnIndices.professionalIndemnity].toLowerCase() === 'no') {
+      console.log(`Skipping row ${i + 1}: No professional indemnity insurance`);
+      continue;
+    }
+    
+    // Skip if already has coordinates
+    if (row[columnIndices.latitude] && row[columnIndices.longitude] && 
+        row[columnIndices.latitude] !== 'FAILED' && row[columnIndices.longitude] !== 'FAILED') {
+      continue;
+    }
+    
+    const practiceName = row[columnIndices.practiceName];
+    const postcode = row[columnIndices.practicePostcode];
+    
+    if (!practiceName || !postcode) {
+      continue;
+    }
+    
+    newEntries++;
+    const fullAddress = `${practiceName}, ${postcode}, UK`;
+    
+    console.log(`Geocoding row ${i + 1}: "${practiceName}" at "${postcode}"`);
+    
+    try {
+      const coordinates = geocodeAddressGoogle(fullAddress, postcode);
+      
+      if (coordinates) {
+        sheet.getRange(i + 1, columnIndices.latitude + 1).setValue(coordinates.lat);
+        sheet.getRange(i + 1, columnIndices.longitude + 1).setValue(coordinates.lng);
+        successful++;
+        console.log(`Success: Lat: ${coordinates.lat}, Lng: ${coordinates.lng}`);
+      } else {
+        sheet.getRange(i + 1, columnIndices.latitude + 1).setValue('FAILED');
+        sheet.getRange(i + 1, columnIndices.longitude + 1).setValue('FAILED');
+        failed++;
+        failedAddresses.push({
+          practiceName: practiceName,
+          postcode: postcode,
+          row: i + 1
+        });
+      }
+      
+      Utilities.sleep(1000); // Respect rate limits
+      
+    } catch (error) {
+      console.error(`Error geocoding row ${i + 1}:`, error.message);
+      sheet.getRange(i + 1, columnIndices.latitude + 1).setValue('ERROR');
+      sheet.getRange(i + 1, columnIndices.longitude + 1).setValue('ERROR');
+      failed++;
+    }
+  }
+  
+  // Send summary email if there were new entries
+  if (newEntries > 0) {
+    sendGeocodingReport(newEntries, successful, failed, failedAddresses);
+  }
+  
+  console.log(`Geocoding complete: ${successful} successful, ${failed} failed`);
+}
+
+/**
+ * Check for new entries and send notifications (runs every hour)
+ */
+function checkForNewEntries() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    console.error(`Sheet "${SHEET_NAME}" not found`);
+    return;
+  }
+
+  let data = sheet.getDataRange().getValues();
+  let headers = data[0];
+
+  // Find column indices - UPDATED TO USE 'Practice Phone Number'
+  const columnIndices = {
+    timestamp: findColumnIndex(headers, 'Timestamp'),
+    practitionerName: findColumnIndex(headers, 'Practitioner Name'),
+    practiceName: findColumnIndex(headers, 'Practice Name'),
+    practiceNumber: findColumnIndex(headers, 'Practice Phone Number'),
+    practicePostcode: findColumnIndex(headers, 'Practice Postcode'),
+    officeEmail: findColumnIndex(headers, 'Office Email'),
+    occupation: findColumnIndex(headers, 'Occupation'),
+    registered: findColumnIndex(headers, 'Registered'),
+    registeringBody: findColumnIndex(headers, 'Registering Body'),
+    registeredNumber: findColumnIndex(headers, 'Registered Number'),
+    skills: findColumnIndex(headers, 'Skills'),
+    openingTimes: findColumnIndex(headers, 'Practice Opening Times'),
+    costOneEar: findColumnIndex(headers, 'Cost One Ear (£)-Pounds'),
+    costTwoEars: findColumnIndex(headers, 'Cost Two Ears (£)-Pounds'),
+    virtualNumber: findColumnIndex(headers, 'Virtual Number'),
+    welcomeEmailSent: findColumnIndex(headers, 'Welcome Email Sent'),
+    adminNotified: findColumnIndex(headers, 'Admin Notified')
+  };
+
+  // Add tracking columns if they don't exist
+  let columnsAdded = false;
+
+  if (columnIndices.welcomeEmailSent === -1) {
+    const newCol = headers.length + 1;
+    sheet.insertColumnAfter(headers.length);
+    sheet.getRange(1, newCol).setValue('Welcome Email Sent');
+    columnIndices.welcomeEmailSent = headers.length;
+    headers.push('Welcome Email Sent');
+    columnsAdded = true;
+  }
+
+  if (columnIndices.adminNotified === -1) {
+    const newCol = headers.length + 1;
+    sheet.insertColumnAfter(headers.length);
+    sheet.getRange(1, newCol).setValue('Admin Notified');
+    columnIndices.adminNotified = headers.length;
+    headers.push('Admin Notified');
+    columnsAdded = true;
+  }
+
+  // Re-fetch data if we added columns
+  if (columnsAdded) {
+    SpreadsheetApp.flush();
+    data = sheet.getDataRange().getValues();
+  }
+
+  let newEntriesFound = false;
+
+  // Process each row
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+
+    // Check if admin has been notified
+    if (!row[columnIndices.adminNotified] || row[columnIndices.adminNotified] !== 'Yes') {
+
+      const practitionerData = {
+        practitionerName: row[columnIndices.practitionerName] || '',
+        practiceName: row[columnIndices.practiceName] || '',
+        practiceNumber: row[columnIndices.practiceNumber] || '',
+        practicePostcode: row[columnIndices.practicePostcode] || '',
+        officeEmail: row[columnIndices.officeEmail] || '',
+        occupation: row[columnIndices.occupation] || '',
+        registered: row[columnIndices.registered] || '',
+        registeringBody: row[columnIndices.registeringBody] || '',
+        registeredNumber: row[columnIndices.registeredNumber] || '',
+        skills: row[columnIndices.skills] || '',
+        openingTimes: row[columnIndices.openingTimes] || '',
+        costOneEar: row[columnIndices.costOneEar] || '',
+        costTwoEars: row[columnIndices.costTwoEars] || '',
+        timestamp: row[columnIndices.timestamp] || '',
+        rowNumber: i + 1
+      };
+
+      // Send admin notification
+      try {
+        if (sendAdminNotification(practitionerData)) {
+          sheet.getRange(i + 1, columnIndices.adminNotified + 1).setValue('Yes');
+          sheet.getRange(i + 1, columnIndices.adminNotified + 1).setNote(`Admin notified on ${new Date().toLocaleDateString('en-GB')}`);
+          newEntriesFound = true;
+          console.log(`Admin notification sent for row ${i + 1}`);
+
+          // Sync to Jasper's sheet and notify him
+          syncToJasperSheet(practitionerData);
+          sendJasperNewRegistration(practitionerData);
+        }
+      } catch (error) {
+        console.error(`Error sending admin notification for row ${i + 1}:`, error);
+      }
+
+      // Send welcome email if not already sent
+      if (!row[columnIndices.welcomeEmailSent] || row[columnIndices.welcomeEmailSent] !== 'Yes') {
+        try {
+          if (practitionerData.officeEmail && sendWelcomeEmail(practitionerData)) {
+            sheet.getRange(i + 1, columnIndices.welcomeEmailSent + 1).setValue('Yes');
+            sheet.getRange(i + 1, columnIndices.welcomeEmailSent + 1).setNote(`Welcome email sent on ${new Date().toLocaleDateString('en-GB')}`);
+            console.log(`Welcome email sent for row ${i + 1}`);
+          }
+        } catch (error) {
+          console.error(`Error sending welcome email for row ${i + 1}:`, error);
+        }
+      }
+
+      // Force flush after each row update
+      SpreadsheetApp.flush();
+      Utilities.sleep(1000); // Prevent hitting email limits
+    }
+  }
+
+  if (newEntriesFound) {
+    console.log('New entries processed and notifications sent');
+  }
+}
+
+/**
+ * Initialize Virtual Number Assignment System
+ * Run this once to set up the separate sheet for Jasper
+ */
+function initializeVirtualNumberSheet() {
+  // Create a new spreadsheet for Jasper
+  const jasperSpreadsheet = SpreadsheetApp.create('Virtual Number Assignment - Jasper Access Only');
+  const jasperSheet = jasperSpreadsheet.getActiveSheet();
+
+  // Set up headers
+  jasperSheet.getRange(1, 1, 1, 6).setValues([[
+    'Practice Name',
+    'Practice Phone Number',
+    'Virtual Number',
+    'Date Registered',
+    'Virtual Number Requested',
+    'Last Reminder Sent'
+  ]]);
+
+  // Format headers
+  jasperSheet.getRange(1, 1, 1, 6)
+    .setBackground('#00796B')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold');
+
+  // Set column widths
+  jasperSheet.setColumnWidth(1, 200); // Practice Name
+  jasperSheet.setColumnWidth(2, 150); // Phone Number
+  jasperSheet.setColumnWidth(3, 150); // Virtual Number
+  jasperSheet.setColumnWidth(4, 120); // Date Registered
+  jasperSheet.setColumnWidth(5, 150); // VN Requested
+  jasperSheet.setColumnWidth(6, 150); // Last Reminder
+
+  // Share with Jasper (edit access)
+  jasperSpreadsheet.addEditor(JASPER_EMAIL);
+
+  // Get the ID of the new spreadsheet
+  const newSheetId = jasperSpreadsheet.getId();
+
+  console.log('Virtual Number Sheet created!');
+  console.log('Sheet ID:', newSheetId);
+  console.log('Sheet URL:', jasperSpreadsheet.getUrl());
+
+  // IMPORTANT: Update the JASPER_SHEET_ID constant with this ID
+  SpreadsheetApp.getUi().alert(
+    'Virtual Number Sheet Created',
+    `Sheet ID: ${newSheetId}\n\nPLEASE UPDATE the JASPER_SHEET_ID constant in your script with this ID!\n\nSheet URL: ${jasperSpreadsheet.getUrl()}`,
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+
+  return newSheetId;
+}
+
+/**
+ * Sync new entries to Jasper's sheet
+ * This should be called when new clinics register
+ */
+function syncToJasperSheet(practiceData) {
+  try {
+    if (!JASPER_SHEET_ID) {
+      console.log('Jasper sheet not initialized');
+      return;
+    }
+
+    const jasperSpreadsheet = SpreadsheetApp.openById(JASPER_SHEET_ID);
+    const jasperSheet = jasperSpreadsheet.getActiveSheet();
+
+    // Check if this practice already exists (to avoid duplicates)
+    const data = jasperSheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][1] === practiceData.practiceNumber) {
+        console.log('Practice already in Jasper sheet:', practiceData.practiceName);
+        return;
+      }
+    }
+
+    // Add new row to Jasper's sheet
+    const newRow = [
+      practiceData.practiceName,
+      practiceData.practiceNumber,
+      '', // Virtual Number (empty for Jasper to fill)
+      new Date().toLocaleDateString('en-GB'),
+      new Date().toLocaleString('en-GB'), // VN Requested timestamp
+      '' // Last Reminder (will be filled by reminder system)
+    ];
+
+    jasperSheet.appendRow(newRow);
+    console.log('Added to Jasper sheet:', practiceData.practiceName);
+
+  } catch (error) {
+    console.error('Error syncing to Jasper sheet:', error);
+  }
+}
+
+/**
+ * Send immediate notification to Jasper for new registration
+ */
+function sendJasperNewRegistration(practitionerData) {
+  try {
+    const subject = `New Virtual Number Needed - ${practitionerData.practiceName}`;
+
+    const body = `Hi Jasper,
+
+New practice registered - please assign virtual number:
+
+Practice: ${practitionerData.practiceName}
+Phone: ${practitionerData.practiceNumber}
+Location: ${practitionerData.practicePostcode}
+
+Access your sheet: https://docs.google.com/spreadsheets/d/${JASPER_SHEET_ID}
+
+Thanks,
+Earwax Clinic Network System`;
+
+    GmailApp.sendEmail(JASPER_EMAIL, subject, body);
+    console.log('Jasper notified of new registration');
+
+  } catch (error) {
+    console.error('Failed to notify Jasper:', error);
+  }
+}
+
+/**
+ * Sync virtual numbers back to main sheet
+ * This runs every hour to check for updates from Jasper
+ */
+function syncVirtualNumbersFromJasper() {
+  try {
+    if (!JASPER_SHEET_ID) {
+      console.log('Jasper sheet not initialized');
+      return;
+    }
+
+    const mainSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const jasperSpreadsheet = SpreadsheetApp.openById(JASPER_SHEET_ID);
+    const jasperSheet = jasperSpreadsheet.getActiveSheet();
+
+    let mainData = mainSheet.getDataRange().getValues();
+    const jasperData = jasperSheet.getDataRange().getValues();
+
+    let mainHeaders = mainData[0];
+    const practiceNumberIndex = findColumnIndex(mainHeaders, 'Practice Phone Number');
+    let virtualNumberIndex = findColumnIndex(mainHeaders, 'Virtual Number');
+
+    // Create Virtual Number column if it doesn't exist
+    if (virtualNumberIndex === -1) {
+      mainSheet.insertColumnAfter(mainHeaders.length);
+      virtualNumberIndex = mainHeaders.length;
+      mainSheet.getRange(1, virtualNumberIndex + 1).setValue('Virtual Number');
+      
+      // IMPORTANT: Re-fetch data after adding column
+      SpreadsheetApp.flush();
+      mainData = mainSheet.getDataRange().getValues();
+      mainHeaders = mainData[0];
+    }
+
+    let updatesCount = 0;
+
+    // Helper function to normalize phone numbers
+    function normalizePhone(phone) {
+      return String(phone || '')
+        .replace(/[\s\-\(\)]/g, '')     // Remove all spaces
+        .replace(/-/g, '')      // Remove hyphens
+        .replace(/\(/g, '')     // Remove parentheses
+        .replace(/\)/g, '')     // Remove parentheses
+        .replace(/^\+44/, '')   // Remove UK country code
+        .replace(/^0+/, '');    // Remove all leading zeros
+    }
+
+    // Check each entry in Jasper's sheet
+    for (let j = 1; j < jasperData.length; j++) {
+      const jasperPhone = jasperData[j][1]; // Practice Phone Number
+      const jasperVirtualNumber = jasperData[j][2]; // Virtual Number
+
+      if (jasperVirtualNumber && jasperVirtualNumber.toString().trim() !== '') {
+        // Find matching row in main sheet
+        for (let m = 1; m < mainData.length; m++) {
+          const mainPhone = mainData[m][practiceNumberIndex];
+          
+          // Normalize both phone numbers for comparison
+          const mainPhoneClean = normalizePhone(mainPhone);
+          const jasperPhoneClean = normalizePhone(jasperPhone);
+
+          if (mainPhoneClean === jasperPhoneClean && mainPhoneClean !== '') {
+            const currentVirtualNumber = String(mainData[m][virtualNumberIndex] || '').trim();
+            const newVirtualNumber = String(jasperVirtualNumber).trim();
+
+            // Update if different or empty
+            if (currentVirtualNumber !== newVirtualNumber) {
+              mainSheet.getRange(m + 1, virtualNumberIndex + 1).setValue(newVirtualNumber);
+              console.log(`Updated virtual number for row ${m + 1} (${mainPhone}): ${newVirtualNumber}`);
+              updatesCount++;
+              
+              // Update the reminder status in Jasper's sheet
+              jasperSheet.getRange(j + 1, 6).setValue('VN Assigned: ' + new Date().toLocaleDateString('en-GB'));
+              
+              // Force flush the changes
+              SpreadsheetApp.flush();
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    console.log(`Virtual number sync completed. ${updatesCount} numbers updated.`);
+    
+    if (updatesCount > 0) {
+      // Optional: Show a notification if running manually
+      try {
+        SpreadsheetApp.getActiveSpreadsheet().toast(
+          `Successfully synced ${updatesCount} virtual number(s)`,
+          'Sync Complete',
+          5
+        );
+      } catch (e) {
+        // Toast only works when run from spreadsheet, not script editor
+      }
+    }
+
+  } catch (error) {
+    console.error('Error syncing virtual numbers from Jasper:', error);
+  }
+}
+
+/**
+ * Send reminder emails for unassigned virtual numbers
+ * This should run daily
+ */
+function sendVirtualNumberReminders() {
+  try {
+    if (!JASPER_SHEET_ID) {
+      console.log('Jasper sheet not initialized');
+      return;
+    }
+
+    const jasperSpreadsheet = SpreadsheetApp.openById(JASPER_SHEET_ID);
+    const jasperSheet = jasperSpreadsheet.getActiveSheet();
+    const data = jasperSheet.getDataRange().getValues();
+
+    const now = new Date();
+    let remindersToSend = [];
+    let alertPaul = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const practiceName = data[i][0];
+      const practicePhone = data[i][1];
+      const virtualNumber = data[i][2];
+      const vnRequestedStr = data[i][4];
+      const lastReminderStr = data[i][5];
+
+      // Skip if virtual number already assigned
+      if (virtualNumber && virtualNumber.trim() !== '') {
+        continue;
+      }
+
+      // Parse dates
+      const vnRequested = new Date(vnRequestedStr);
+      const daysSinceRequest = Math.floor((now - vnRequested) / (1000 * 60 * 60 * 24));
+
+      let lastReminder = null;
+      let daysSinceLastReminder = 999;
+
+      if (lastReminderStr && !lastReminderStr.includes('VN Assigned')) {
+        lastReminder = new Date(lastReminderStr);
+        daysSinceLastReminder = Math.floor((now - lastReminder) / (1000 * 60 * 60 * 24));
+      }
+
+      // Determine if reminder needed
+      if (daysSinceRequest >= 14 && !lastReminderStr.includes('Paul notified')) {
+        // Alert Paul after 14 days
+        alertPaul.push({
+          practiceName: practiceName,
+          practicePhone: practicePhone,
+          daysPending: daysSinceRequest,
+          row: i + 1
+        });
+      } else if (daysSinceRequest >= 7 && daysSinceLastReminder >= 2) {
+        // Send reminder to Jasper (7+ days and 2+ days since last reminder)
+        remindersToSend.push({
+          practiceName: practiceName,
+          practicePhone: practicePhone,
+          daysPending: daysSinceRequest,
+          row: i + 1
+        });
+      } else if (daysSinceRequest >= 7 && lastReminder === null) {
+        // First reminder at 7 days
+        remindersToSend.push({
+          practiceName: practiceName,
+          practicePhone: practicePhone,
+          daysPending: daysSinceRequest,
+          row: i + 1
+        });
+      }
+    }
+
+    // Send reminders to Jasper
+    if (remindersToSend.length > 0) {
+      sendJasperReminder(remindersToSend);
+
+      // Update last reminder dates
+      remindersToSend.forEach(item => {
+        jasperSheet.getRange(item.row, 6).setValue(new Date().toLocaleString('en-GB'));
+      });
+    }
+
+    // Alert Paul if needed
+    if (alertPaul.length > 0) {
+      sendPaulAlert(alertPaul);
+
+      // Mark as Paul notified
+      alertPaul.forEach(item => {
+        jasperSheet.getRange(item.row, 6).setValue('Paul notified: ' + new Date().toLocaleDateString('en-GB'));
+      });
+    }
+
+    console.log(`Reminders: ${remindersToSend.length} to Jasper, ${alertPaul.length} to Paul`);
+
+  } catch (error) {
+    console.error('Error sending virtual number reminders:', error);
+  }
+}
+
+/**
+ * Send reminder email to Jasper
+ */
+function sendJasperReminder(pendingAssignments) {
+  try {
+    const subject = `⏰ Virtual Numbers Needed - ${pendingAssignments.length} Pending`;
+
+    let body = `Hi Jasper,\n\nPlease assign virtual numbers to these practices:\n\n`;
+
+    pendingAssignments.forEach(item => {
+      body += `• ${item.practiceName}\n`;
+      body += `  Phone: ${item.practicePhone}\n`;
+      body += `  Waiting: ${item.daysPending} days\n\n`;
+    });
+
+    body += `Access the sheet here: https://docs.google.com/spreadsheets/d/${JASPER_SHEET_ID}\n\n`;
+    body += `Thanks,\nEarwax Clinic Network System`;
+
+    GmailApp.sendEmail(JASPER_EMAIL, subject, body);
+    console.log(`Reminder sent to Jasper for ${pendingAssignments.length} assignments`);
+
+  } catch (error) {
+    console.error('Failed to send Jasper reminder:', error);
+  }
+}
+
+/**
+ * Alert Paul about overdue virtual numbers
+ */
+function sendPaulAlert(overdueAssignments) {
+  try {
+    const subject = `🚨 Virtual Numbers Overdue - ${overdueAssignments.length} Pending 14+ Days`;
+
+    let body = `Paul,\n\nThese virtual numbers have been pending for over 14 days:\n\n`;
+
+    overdueAssignments.forEach(item => {
+      body += `• ${item.practiceName}\n`;
+      body += `  Phone: ${item.practicePhone}\n`;
+      body += `  Waiting: ${item.daysPending} days\n\n`;
+    });
+
+    body += `Please follow up with Jasper.\n\n`;
+    body += `Jasper's sheet: https://docs.google.com/spreadsheets/d/${JASPER_SHEET_ID}\n`;
+    body += `Main sheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}`;
+
+    GmailApp.sendEmail(PAUL_EMAIL, subject, body);
+    console.log(`Alert sent to Paul for ${overdueAssignments.length} overdue assignments`);
+
+  } catch (error) {
+    console.error('Failed to send Paul alert:', error);
+  }
+}
+
+/**
+ * Setup hourly virtual number sync
+ */
+function setupVirtualNumberSync() {
+  // Remove existing sync triggers
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'syncVirtualNumbersFromJasper') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // Create new trigger
+  ScriptApp.newTrigger('syncVirtualNumbersFromJasper')
+    .timeBased()
+    .everyHours(1)
+    .create();
+
+  SpreadsheetApp.getUi().alert(
+    'Virtual Number Sync Enabled',
+    'System will sync virtual numbers from Jasper\'s sheet every hour.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Setup daily reminder system
+ */
+function setupDailyReminders() {
+  // Remove existing reminder triggers
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'sendVirtualNumberReminders') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // Create new trigger
+  ScriptApp.newTrigger('sendVirtualNumberReminders')
+    .timeBased()
+    .everyDays(1)
+    .atHour(9) // 9am daily
+    .create();
+
+  SpreadsheetApp.getUi().alert(
+    'Daily Reminders Enabled',
+    'Reminder system will check for pending virtual numbers daily at 9am.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Send admin notification for new registration
+ */
+function sendAdminNotification(practitionerData) {
+  try {
+    const subject = `🆕 New Earwax Clinic Registration - ${practitionerData.practiceName}`;
+    
+    const body = `Hello Admin,
+
+A new practitioner has registered on the Earwax Clinic Network:
+
+PRACTITIONER DETAILS:
+• Name: ${practitionerData.practitionerName}
+• Occupation: ${practitionerData.occupation}
+• Registered: ${practitionerData.registered}
+• Registering Body: ${practitionerData.registeringBody}
+• Registration Number: ${practitionerData.registeredNumber}
+
+PRACTICE DETAILS:
+• Practice Name: ${practitionerData.practiceName}
+• Practice Number: ${practitionerData.practiceNumber}
+• Postcode: ${practitionerData.practicePostcode}
+• Opening Times: ${practitionerData.openingTimes}
+
+SERVICES:
+• Skills: ${practitionerData.skills}
+• Cost (One Ear): £${practitionerData.costOneEar}
+• Cost (Two Ears): £${practitionerData.costTwoEars}
+
+CONTACT:
+• Email: ${practitionerData.officeEmail}
+
+ACTION REQUIRED:
+Jasper has been notified to assign a Virtual Number (Row ${practitionerData.rowNumber}).
+Virtual numbers are managed in Jasper's separate sheet.
+
+Registration Time: ${practitionerData.timestamp}
+
+View Sheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}
+
+Best regards,
+Earwax Clinic Network System`;
+
+    GmailApp.sendEmail(ADMIN_EMAIL, subject, body);
+    console.log(`Admin notification sent for ${practitionerData.practiceName}`);
+    return true;
+
+  } catch (error) {
+    console.error('Failed to send admin notification:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Send welcome email to new practitioner
+ */
+function sendWelcomeEmail(practitionerData) {
+  try {
+    // Check if email exists
+    if (!practitionerData.officeEmail) {
+      console.log('No email address provided for welcome email');
+      return false;
+    }
+
+    const subject = 'Welcome to the Earwax Clinic Network';
+    
+    const body = `Dear ${practitionerData.practitionerName},
+
+Welcome to the Earwax Clinic Network!
+
+Your practice, ${practitionerData.practiceName}, has been successfully registered and will appear on our interactive map at earwaxclinic.co.uk/earwax-clinic-locations in the next 24 hours.
+
+WHAT HAPPENS NEXT:
+1. Your registration is being reviewed by our admin team
+2. A unique virtual number will be assigned to your practice and only then are we able to start billing you for leads
+3. Your clinic will then be visible on our public map in the next 24 hours
+4. Patients will be able to find you based on skills and professional registration
+
+YOUR REGISTRATION DETAILS:
+- Practice: ${practitionerData.practiceName}
+- Location: ${practitionerData.practicePostcode}
+- Services: ${practitionerData.skills}
+- Pricing: £${practitionerData.costOneEar} (one ear) / £${practitionerData.costTwoEars} (two ears)
+
+TRANSPARENCY COMMITMENT:
+The Earwax Clinic Network is committed to transparency in qualifications and registrations. Your professional credentials will be clearly displayed to help patients make informed decisions.
+
+NEED TO UPDATE YOUR INFORMATION?
+If you need to update any of your practice details, please head over to thehearinglabstore.co.uk/leads/update with your practice phone number and make the changes required.
+
+QUESTIONS?
+If you have any questions about your listing or the network, please don't hesitate to contact us.
+
+Thank you for joining our professional network. Remember to leave us a review at https://g.page/r/CXmJkm55bFwGEAE/review
+
+Best regards,
+The Earwax Clinic Network Team
+earwaxclinic.co.uk`;
+
+    GmailApp.sendEmail(
+      practitionerData.officeEmail,
+      subject,
+      body,
+      {
+        name: 'Earwax Clinic Network',
+        replyTo: REPLY_TO_EMAIL
+      }
+    );
+
+    console.log(`Welcome email sent to ${practitionerData.practitionerName}`);
+    return true;
+
+  } catch (error) {
+    console.error('Failed to send welcome email:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Process update request
+ */
+function processUpdateRequest() {
+  const ui = SpreadsheetApp.getUi();
+  
+  const response = ui.prompt(
+    'Update Request',
+    'Enter the Practice Phone Number to update:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const practicePhoneNumber = response.getResponseText();
+    
+    if (practicePhoneNumber) {
+      const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+      const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+      const data = sheet.getDataRange().getValues();
+      const headers = data[0];
+      
+      const practicePhoneIndex = findColumnIndex(headers, 'Practice Phone Number'); // Already correct
+      
+      // Find the row with this practice phone number
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][practicePhoneIndex] === practicePhoneNumber) {
+          // Found the practice
+          const practitionerName = data[i][findColumnIndex(headers, 'Practitioner Name')];
+          const email = data[i][findColumnIndex(headers, 'Office Email')];
+          
+          // Send update request email
+          sendUpdateRequestEmail(practicePhoneNumber, practitionerName, email);
+          
+          ui.alert(
+            'Update Request Sent',
+            `An update request has been sent to ${UPDATE_REQUEST_EMAIL} for practice with phone ${practicePhoneNumber}.`,
+            ui.ButtonSet.OK
+          );
+          return;
+        }
+      }
+      
+      ui.alert(
+        'Practice Not Found',
+        `No practice found with phone number: ${practicePhoneNumber}`,
+        ui.ButtonSet.OK
+      );
+    }
+  }
+}
+
+/**
+ * Send update request email
+ */
+function sendUpdateRequestEmail(practicePhoneNumber, practitionerName, practitionerEmail) {
+  try {
+    const subject = `Update Request - Practice Phone ${practicePhoneNumber}`;
+    
+    const body = `Update request received for:
+
+Practice Phone Number: ${practicePhoneNumber}
+Practitioner: ${practitionerName}
+Email: ${practitionerEmail}
+
+The practitioner needs to update their information in the Earwax Clinic Network.
+
+Please note: Virtual Numbers cannot be changed through this process.
+
+Please contact the practitioner at ${practitionerEmail} to gather the updated information.
+
+Spreadsheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}
+
+Best regards,
+Earwax Clinic Network System`;
+
+    GmailApp.sendEmail(UPDATE_REQUEST_EMAIL, subject, body);
+    console.log(`Update request sent for practice phone ${practicePhoneNumber}`);
+    
+  } catch (error) {
+    console.error('Failed to send update request:', error.message);
+  }
+}
+
+/**
+ * Enhanced geocoding with intelligent fallbacks
+ * Try: 1) Business + Postcode, 2) Postcode only, 3) Mark for manual review
+ */
+function geocodeAddressGoogle(address, postcode) {
+  try {
+    // First attempt: Full address with business name
+    console.log(`Attempt 1: Full address - "${address}"`);
+    let coordinates = attemptGeocode(address);
+
+    if (coordinates) {
+      console.log('Success with full address');
+      return coordinates;
+    }
+
+    // Second attempt: Postcode only for better accuracy
+    if (postcode) {
+      const postcodeOnly = postcode + ', UK';
+      console.log(`Attempt 2: Postcode only - "${postcodeOnly}"`);
+      coordinates = attemptGeocode(postcodeOnly);
+
+      if (coordinates) {
+        console.log('Success with postcode only');
+        return coordinates;
+      }
+    }
+
+    // Third attempt: Partial postcode (outward code only)
+    if (postcode && postcode.includes(' ')) {
+      const outwardCode = postcode.split(' ')[0] + ', UK';
+      console.log(`Attempt 3: Outward postcode - "${outwardCode}"`);
+      coordinates = attemptGeocode(outwardCode);
+
+      if (coordinates) {
+        console.log('Success with outward postcode (less precise)');
+        return coordinates;
+      }
+    }
+
+    console.log('All geocoding attempts failed');
+    return null;
+
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    return null;
+  }
+}
+
+/**
+ * Single geocoding attempt with Google Maps
+ */
+function attemptGeocode(searchTerm) {
+  try {
+    const encodedAddress = encodeURIComponent(searchTerm);
+    const searchUrl = `https://www.google.com/maps/search/${encodedAddress}`;
+
+    const response = UrlFetchApp.fetch(searchUrl, {
+      'method': 'GET',
+      'headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      'followRedirects': true,
+      'muteHttpExceptions': true
+    });
+
+    if (response.getResponseCode() === 200) {
+      const html = response.getContentText();
+
+      // Try multiple regex patterns for coordinates
+      const patterns = [
+        /@(-?\d+\.\d+),(-?\d+\.\d+),/,
+        /"(-?\d+\.\d+),(-?\d+\.\d+)"/,
+        /ll=(-?\d+\.\d+),(-?\d+\.\d+)/,
+        /center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/
+      ];
+
+      for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match) {
+          return {
+            lat: parseFloat(match[1]),
+            lng: parseFloat(match[2])
+          };
+        }
+      }
+    }
+
+    return null;
+
+  } catch (error) {
+    console.error(`Error attempting geocode for "${searchTerm}":`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Send geocoding report
+ */
+function sendGeocodingReport(newEntries, successful, failed, failedAddresses) {
+  try {
+    const userEmail = Session.getActiveUser().getEmail();
+    const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London' });
+    
+    let subject = failed === 0 ? 
+      `✅ Earwax Clinic: ${successful} locations geocoded` :
+      `⚠️ Earwax Clinic: ${successful} geocoded, ${failed} failed`;
+    
+    let body = `Geocoding Report\n\n`;
+    body += `📊 SUMMARY:\n`;
+    body += `• ${newEntries} new entries processed\n`;
+    body += `• ${successful} successfully geocoded\n`;
+    body += `• ${failed} failed to geocode\n`;
+    body += `• Processed: ${timestamp}\n\n`;
+    
+    if (failedAddresses.length > 0) {
+      body += `❌ FAILED ADDRESSES:\n`;
+      failedAddresses.forEach((item, index) => {
+        body += `${index + 1}. ${item.practiceName}\n`;
+        body += `   Postcode: ${item.postcode}\n`;
+        body += `   Row: ${item.row}\n\n`;
+      });
+    }
+    
+    body += `View Sheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}`;
+    
+    GmailApp.sendEmail(userEmail, subject, body);
+    
+  } catch (error) {
+    console.error('Failed to send geocoding report:', error.message);
+  }
+}
+
+/**
+ * Find column index by name
+ */
+function findColumnIndex(headers, columnName) {
+  const normalizedName = columnName.toLowerCase();
+  
+  for (let i = 0; i < headers.length; i++) {
+    if (headers[i] && headers[i].toString().toLowerCase() === normalizedName) {
+      return i;
+    }
+  }
+  
+  return -1;
+}
+
+/**
+ * Menu function
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+
+  ui.createMenu('Earwax Clinic Network')
+    .addItem('🔍 Geocode All Entries', 'manualGeocoding')
+    .addItem('📧 Check for New Entries', 'checkForNewEntries')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('⚙️ Automation Setup')
+      .addItem('⏰ Setup Daily Geocoding (2am)', 'setupDailyGeocoding')
+      .addItem('📬 Setup Hourly Entry Check', 'setupHourlyCheck')
+      .addItem('🔢 Setup Virtual Number Sync', 'setupVirtualNumberSync')
+      .addItem('📅 Setup Daily Reminders', 'setupDailyReminders')
+      .addItem('🧹 Setup Code Cleanup (3am)', 'setupCodeCleanup')
+      .addItem('⏸️ Disable All Automation', 'disableAllTriggers'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('🔢 Virtual Numbers')
+      .addItem('🆕 Initialize Jasper Sheet', 'initializeVirtualNumberSheet')
+      .addItem('🔄 Sync Virtual Numbers Now', 'syncVirtualNumbersFromJasper')
+      .addItem('📨 Check Reminders Now', 'sendVirtualNumberReminders'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('🏥 Clinic Management')
+      .addItem('⏯️ Pause/Resume Clinic', 'managePauseStatus')
+      .addItem('✏️ Request Update', 'processUpdateRequest')
+      .addItem('🧪 Test Single Address', 'testGeocoding')
+      .addItem('🗑️ Clear Failed Geocoding', 'clearFailedAttempts'))
+    .addSeparator()
+    .addSubMenu(ui.createMenu('🔒 Sheet Protection')
+      .addItem('🛡️ Protect Main Sheet', 'protectMainSheet')
+      .addItem('🔓 Remove Protection', 'unprotectMainSheet')
+      .addItem('ℹ️ Check Protection Status', 'checkProtectionStatus'))
+    .addToUi();
+}
+
+/**
+ * Manage pause status for a clinic
+ */
+function managePauseStatus() {
+  const ui = SpreadsheetApp.getUi();
+  
+  const response = ui.prompt(
+    'Pause/Resume Clinic',
+    'Enter the Practice Phone Number to pause/resume:', // Updated prompt text
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const practiceNumber = response.getResponseText();
+    
+    if (practiceNumber) {
+      const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+      const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+      const data = sheet.getDataRange().getValues();
+      const headers = data[0];
+      
+      const practiceNumberIndex = findColumnIndex(headers, 'Practice Phone Number'); // CHANGED
+      const statusIndex = findColumnIndex(headers, 'Status');
+      const statusNoteIndex = findColumnIndex(headers, 'Status Note');
+      
+      // Find the row with this practice number
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][practiceNumberIndex] === practiceNumber) {
+          const currentStatus = data[i][statusIndex] || 'Active';
+          
+          if (currentStatus === 'Active') {
+            // Pause the clinic
+            const noteResponse = ui.prompt(
+              'Pause Reason',
+              'Enter reason for pause (e.g., Holiday until 01/02/2025):',
+              ui.ButtonSet.OK_CANCEL
+            );
+            
+            if (noteResponse.getSelectedButton() === ui.Button.OK) {
+              sheet.getRange(i + 1, statusIndex + 1).setValue('Paused');
+              sheet.getRange(i + 1, statusNoteIndex + 1).setValue(noteResponse.getResponseText());
+              
+              ui.alert(
+                'Clinic Paused',
+                `Practice ${practiceNumber} has been paused. It will not appear on the map.`,
+                ui.ButtonSet.OK
+              );
+            }
+          } else {
+            // Resume the clinic
+            sheet.getRange(i + 1, statusIndex + 1).setValue('Active');
+            sheet.getRange(i + 1, statusNoteIndex + 1).setValue('Resumed on ' + new Date().toLocaleDateString('en-GB'));
+            
+            ui.alert(
+              'Clinic Resumed',
+              `Practice ${practiceNumber} has been resumed and will appear on the map.`,
+              ui.ButtonSet.OK
+            );
+          }
+          return;
+        }
+      }
+      
+      ui.alert(
+        'Practice Not Found',
+        `No practice found with phone number: ${practiceNumber}`,
+        ui.ButtonSet.OK
+      );
+    }
+  }
+}
+
+/**
+ * Manual geocoding
+ */
+function manualGeocoding() {
+  const ui = SpreadsheetApp.getUi();
+  geocodeEarwaxClinics();
+  ui.alert('Geocoding Complete', 'Check your email for the geocoding report.', ui.ButtonSet.OK);
+}
+
+/**
+ * Setup daily geocoding trigger
+ */
+function setupDailyGeocoding() {
+  // Remove existing geocoding triggers
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'geocodeEarwaxClinics') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  
+  // Create new trigger
+  ScriptApp.newTrigger('geocodeEarwaxClinics')
+    .timeBased()
+    .everyDays(1)
+    .atHour(2)
+    .create();
+  
+  SpreadsheetApp.getUi().alert(
+    'Daily Geocoding Enabled',
+    'Automatic geocoding will run daily at 2am.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Setup hourly check for new entries
+ */
+function setupHourlyCheck() {
+  // Remove existing check triggers
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'checkForNewEntries') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  
+  // Create new trigger
+  ScriptApp.newTrigger('checkForNewEntries')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  
+  SpreadsheetApp.getUi().alert(
+    'Hourly Check Enabled',
+    'System will check for new entries every hour and send notifications.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Disable all triggers
+ */
+function disableAllTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    ScriptApp.deleteTrigger(trigger);
+  });
+  
+  SpreadsheetApp.getUi().alert(
+    'Automation Disabled',
+    'All automatic triggers have been removed.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Test geocoding
+ */
+function testGeocoding() {
+  const ui = SpreadsheetApp.getUi();
+  
+  const response = ui.prompt(
+    'Test Geocoding',
+    'Enter a UK postcode to test:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const postcode = response.getResponseText();
+    
+    if (postcode) {
+      const coordinates = geocodeAddressGoogle(postcode + ', UK');
+      
+      if (coordinates) {
+        ui.alert(
+          'Success! ✅',
+          `Postcode: ${postcode}\nLatitude: ${coordinates.lat}\nLongitude: ${coordinates.lng}`,
+          ui.ButtonSet.OK
+        );
+      } else {
+        ui.alert('Failed ❌', `Could not geocode: ${postcode}`, ui.ButtonSet.OK);
+      }
+    }
+  }
+}
+
+/**
+ * Clear failed geocoding attempts
+ */
+function clearFailedAttempts() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  
+  const latIndex = findColumnIndex(headers, 'Latitude');
+  const lngIndex = findColumnIndex(headers, 'Longitude');
+  
+  let cleared = 0;
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][latIndex] === 'FAILED' || data[i][latIndex] === 'ERROR') {
+      sheet.getRange(i + 1, latIndex + 1).clearContent();
+      sheet.getRange(i + 1, lngIndex + 1).clearContent();
+      cleared++;
+    }
+  }
+  
+  SpreadsheetApp.getUi().alert(
+    'Failed Attempts Cleared',
+    `Cleared ${cleared} failed geocoding attempts. They will be retried on next run.`,
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Web App Entry Points for Self-Service Portal
+ * Add these functions to your existing Google Apps Script
+ */
+
+/**
+ * Handle GET requests (IMPROVED VERSION)
+ */
+function doGet(e) {
+  console.log('=== doGet REQUEST ===');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Parameters:', JSON.stringify(e.parameter));
+
+  const action = e.parameter.action;
+  const phone = e.parameter.phone;
+  const code = e.parameter.code;
+
+  // Log normalized phone for debugging
+  if (phone) {
+    const searchPhone = phone.replace(/[\s\-\(\)]/g, '');
+    console.log('Normalized phone:', searchPhone);
+  }
+
+  if (action === 'sendCode') {
+    console.log('Action: Send verification code');
+    const result = sendVerificationCode(phone);
+    console.log('Result:', JSON.stringify(result));
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'verify') {
+    console.log('Action: Verify code');
+    const result = verifyCode(phone, code);
+    console.log('Result:', result.success ? 'SUCCESS' : 'FAILED - ' + result.message);
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (action === 'test') {
+    console.log('Action: Test endpoint');
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'Web App is working',
+      timestamp: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  console.log('Invalid action or no action provided');
+  return ContentService.createTextOutput(
+    JSON.stringify({success: false, message: 'Invalid action'})
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+// Handle POST requests (for updates and pause/resume)
+function doPost(e) {
+  const params = e.parameter;
+  const action = params.action;
+  
+  if (action === 'pause') {
+    return handlePauseResume(params);
+  } else if (action === 'update') {
+    return handleUpdate(params);
+  } else if (action === 'delete') {
+    return handleDelete(params);
+  }
+  
+  return ContentService.createTextOutput(
+    JSON.stringify({success: false, message: 'Invalid action'})
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Verify practice phone number and return practice details (with improved phone normalization)
+ */
+function handleVerification(phoneNumber) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    // Find column indices
+    const practiceNumberIndex = findColumnIndex(headers, 'Practice Phone Number');
+    const practiceNameIndex = findColumnIndex(headers, 'Practice Name');
+    const practitionerNameIndex = findColumnIndex(headers, 'Practitioner Name');
+    const emailIndex = findColumnIndex(headers, 'Office Email');
+    const postcodeIndex = findColumnIndex(headers, 'Practice Postcode');
+    const openingTimesIndex = findColumnIndex(headers, 'Practice Opening Times');
+    const costOneIndex = findColumnIndex(headers, 'Cost One Ear (£)-Pounds');
+    const costTwoIndex = findColumnIndex(headers, 'Cost Two Ears (£)-Pounds');
+    const statusIndex = findColumnIndex(headers, 'Status');
+
+    // Find skills columns
+    const skillColumns = {};
+    headers.forEach((header, index) => {
+      const headerStr = header.toString();
+      if (headerStr.includes('Skills-Loupe/O-Scope microsuction')) skillColumns['loupe'] = index;
+      else if (headerStr.includes('Skills-ENT Microscope microsuction')) skillColumns['microscope'] = index;
+      else if (headerStr.includes('Skills-Endoscopic microsuction')) skillColumns['endoscopic'] = index;
+      else if (headerStr.includes('Skills-Water Irrigation')) skillColumns['irrigation'] = index;
+      else if (headerStr.includes('Skills-Manual removal (curettes)')) skillColumns['manual'] = index;
+    });
+
+    // Normalize phone for searching - consistent with other functions
+    const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+
+    // Search for the practice
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const storedPhone = String(row[practiceNumberIndex]).replace(/[\s\-\(\)]/g, '');
+
+      if (storedPhone === searchPhone) {
+        // Compile skills
+        const skills = [];
+        if (row[skillColumns['loupe']] === 'Yes') skills.push('Loupe/O-Scope');
+        if (row[skillColumns['microscope']] === 'Yes') skills.push('ENT Microscope');
+        if (row[skillColumns['endoscopic']] === 'Yes') skills.push('Endoscopic');
+        if (row[skillColumns['irrigation']] === 'Yes') skills.push('Water Irrigation');
+        if (row[skillColumns['manual']] === 'Yes') skills.push('Manual removal');
+
+        const practice = {
+          name: row[practiceNameIndex] || '',
+          practitionerName: row[practitionerNameIndex] || '',
+          email: row[emailIndex] || '',
+          postcode: row[postcodeIndex] || '',
+          openingTimes: row[openingTimesIndex] || '',
+          costOneEar: row[costOneIndex] || '',
+          costTwoEars: row[costTwoIndex] || '',
+          skills: skills.join(', '),
+          status: row[statusIndex] || 'Active',
+          rowNumber: i + 1
+        };
+
+        console.log('Found practice:', practice.name);
+        return {success: true, practice: practice};
+      }
+    }
+
+    console.log('Practice not found for phone:', phoneNumber);
+    return {success: false, message: 'Practice not found'};
+
+  } catch (error) {
+    console.error('Verification error:', error.toString());
+    return {success: false, message: 'Server error: ' + error.toString()};
+  }
+}
+
+/**
+ * Handle pause/resume requests
+ */
+function handlePauseResume(params) {
+  try {
+    const phoneNumber = params.phone;
+    const status = params.status;
+    const reason = params.reason || '';
+    const resumeDate = params.resumeDate || '';
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    const practiceNumberIndex = findColumnIndex(headers, 'Practice Phone Number');
+    const practiceNameIndex = findColumnIndex(headers, 'Practice Name');
+    const practitionerNameIndex = findColumnIndex(headers, 'Practitioner Name');
+    const emailIndex = findColumnIndex(headers, 'Office Email');
+    let statusIndex = findColumnIndex(headers, 'Status');
+    let statusNoteIndex = findColumnIndex(headers, 'Status Note');
+    let resumeDateIndex = findColumnIndex(headers, 'Resume Date');
+
+    // Add status columns if they don't exist
+    if (statusIndex === -1) {
+      sheet.insertColumnAfter(headers.length);
+      statusIndex = headers.length;
+      sheet.getRange(1, statusIndex + 1).setValue('Status');
+    }
+
+    if (statusNoteIndex === -1) {
+      sheet.insertColumnAfter(headers.length);
+      statusNoteIndex = headers.length;
+      sheet.getRange(1, statusNoteIndex + 1).setValue('Status Note');
+    }
+
+    if (resumeDateIndex === -1) {
+      sheet.insertColumnAfter(headers.length);
+      resumeDateIndex = headers.length;
+      sheet.getRange(1, resumeDateIndex + 1).setValue('Resume Date');
+    }
+
+    // Find and update the practice
+    for (let i = 1; i < data.length; i++) {
+      const storedPhone = String(data[i][practiceNumberIndex]).replace(/[\s\-\(\)]/g, '');
+      const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+
+      if (storedPhone === searchPhone) {
+        const practiceName = data[i][practiceNameIndex] || '';
+        const practitionerName = data[i][practitionerNameIndex] || '';
+        const practiceEmail = data[i][emailIndex] || '';
+
+        sheet.getRange(i + 1, statusIndex + 1).setValue(status);
+
+        if (status === 'Paused') {
+          sheet.getRange(i + 1, statusNoteIndex + 1).setValue(reason);
+          if (resumeDate) {
+            sheet.getRange(i + 1, resumeDateIndex + 1).setValue(resumeDate);
+          }
+        } else {
+          sheet.getRange(i + 1, statusNoteIndex + 1).setValue('Resumed on ' + new Date().toLocaleDateString('en-GB'));
+          sheet.getRange(i + 1, resumeDateIndex + 1).clearContent();
+        }
+
+        // Update Last Updated column for pause/resume events
+        let lastUpdatedIndex = findColumnIndex(headers, 'Last Updated');
+        if (lastUpdatedIndex === -1) {
+          sheet.insertColumnAfter(headers.length);
+          lastUpdatedIndex = headers.length;
+          sheet.getRange(1, lastUpdatedIndex + 1).setValue('Last Updated');
+          headers.push('Last Updated'); // Update headers array
+          SpreadsheetApp.flush(); // Ensure column is created
+        }
+        sheet.getRange(i + 1, lastUpdatedIndex + 1).setValue(new Date().toLocaleString('en-GB'));
+
+        // Send notification email to admin
+        sendStatusChangeNotification(phoneNumber, practiceName, status, reason);
+
+        // Send confirmation email to practice
+        sendPracticeConfirmation(practiceName, practitionerName, practiceEmail, status, reason, resumeDate);
+
+        return ContentService.createTextOutput(
+          JSON.stringify({success: true, message: 'Status updated successfully'})
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    return ContentService.createTextOutput(
+      JSON.stringify({success: false, message: 'Practice not found'})
+    ).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    console.error('Pause/Resume error:', error);
+    return ContentService.createTextOutput(
+      JSON.stringify({success: false, message: 'Server error'})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle update requests
+ */
+function handleUpdate(params) {
+  try {
+    const phoneNumber = params.phone;
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    // Find column indices - UPDATED TO USE 'Practice Phone Number'
+    const practiceNumberIndex = findColumnIndex(headers, 'Practice Phone Number'); // CHANGED
+    const practiceNameIndex = findColumnIndex(headers, 'Practice Name');
+    const emailIndex = findColumnIndex(headers, 'Office Email');
+    const postcodeIndex = findColumnIndex(headers, 'Practice Postcode');
+    const openingTimesIndex = findColumnIndex(headers, 'Practice Opening Times');
+    const costOneIndex = findColumnIndex(headers, 'Cost One Ear (£)-Pounds');
+    const costTwoIndex = findColumnIndex(headers, 'Cost Two Ears (£)-Pounds');
+    const latitudeIndex = findColumnIndex(headers, 'Latitude');
+    const longitudeIndex = findColumnIndex(headers, 'Longitude');
+
+    // Find skills columns
+    const skillColumns = {};
+    headers.forEach((header, index) => {
+      const headerStr = header.toString();
+      if (headerStr.includes('Skills-Loupe/O-Scope microsuction')) skillColumns['loupe'] = index;
+      else if (headerStr.includes('Skills-ENT Microscope microsuction')) skillColumns['microscope'] = index;
+      else if (headerStr.includes('Skills-Endoscopic microsuction')) skillColumns['endoscopic'] = index;
+      else if (headerStr.includes('Skills-Water Irrigation')) skillColumns['irrigation'] = index;
+      else if (headerStr.includes('Skills-Manual removal (curettes)')) skillColumns['manual'] = index;
+    });
+    
+    // Find and update the practice - UPDATED to strip spaces
+    for (let i = 1; i < data.length; i++) {
+      const storedPhone = String(data[i][practiceNumberIndex]).replace(/[\s\-\(\)]/g, '');
+      const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+      
+      if (storedPhone === searchPhone) {
+        // Store current values for comparison
+        const currentPracticeName = data[i][practiceNameIndex] || '';
+        const currentEmail = data[i][emailIndex] || '';
+        const currentPostcode = data[i][postcodeIndex] || '';
+        const currentOpeningTimes = data[i][openingTimesIndex] || '';
+        const currentCostOneEar = data[i][costOneIndex] || '';
+        const currentCostTwoEars = data[i][costTwoIndex] || '';
+
+        // Get current skills
+        const currentSkills = [];
+        if (data[i][skillColumns['loupe']] === 'Yes') currentSkills.push('Loupe/O-Scope');
+        if (data[i][skillColumns['microscope']] === 'Yes') currentSkills.push('ENT Microscope');
+        if (data[i][skillColumns['endoscopic']] === 'Yes') currentSkills.push('Endoscopic');
+        if (data[i][skillColumns['irrigation']] === 'Yes') currentSkills.push('Water Irrigation');
+        if (data[i][skillColumns['manual']] === 'Yes') currentSkills.push('Manual removal');
+        const currentSkillsStr = currentSkills.join(', ');
+
+        // Track actual changes
+        const actualUpdates = {};
+        let finalPracticeName = currentPracticeName;
+        let finalEmail = currentEmail;
+
+        // Update fields and track changes
+        if (params.practiceName && params.practiceName !== currentPracticeName) {
+          sheet.getRange(i + 1, practiceNameIndex + 1).setValue(params.practiceName);
+          actualUpdates.practiceName = params.practiceName;
+          finalPracticeName = params.practiceName;
+        }
+
+        if (params.email && params.email !== currentEmail) {
+          sheet.getRange(i + 1, emailIndex + 1).setValue(params.email);
+          actualUpdates.email = params.email;
+          finalEmail = params.email;
+        }
+
+        if (params.postcode && params.postcode !== currentPostcode) {
+          sheet.getRange(i + 1, postcodeIndex + 1).setValue(params.postcode);
+          actualUpdates.postcode = params.postcode;
+          // Clear coordinates if postcode changed - will be re-geocoded
+          sheet.getRange(i + 1, latitudeIndex + 1).clearContent();
+          sheet.getRange(i + 1, longitudeIndex + 1).clearContent();
+        }
+
+        if (params.openingTimes && params.openingTimes !== currentOpeningTimes) {
+          sheet.getRange(i + 1, openingTimesIndex + 1).setValue(params.openingTimes);
+          actualUpdates.openingTimes = params.openingTimes;
+        }
+
+        if (params.costOneEar && params.costOneEar !== currentCostOneEar) {
+          sheet.getRange(i + 1, costOneIndex + 1).setValue(params.costOneEar);
+          actualUpdates.costOneEar = params.costOneEar;
+        }
+
+        if (params.costTwoEars && params.costTwoEars !== currentCostTwoEars) {
+          sheet.getRange(i + 1, costTwoIndex + 1).setValue(params.costTwoEars);
+          actualUpdates.costTwoEars = params.costTwoEars;
+        }
+
+        // Update skills and track changes
+        if (params.skills && params.skills !== currentSkillsStr) {
+          const selectedSkills = params.skills.split(',').map(s => s.trim());
+
+          // Reset all skills
+          Object.keys(skillColumns).forEach(skill => {
+            sheet.getRange(i + 1, skillColumns[skill] + 1).setValue('No');
+          });
+
+          // Set selected skills
+          selectedSkills.forEach(skill => {
+            if (skill.includes('Loupe')) sheet.getRange(i + 1, skillColumns['loupe'] + 1).setValue('Yes');
+            if (skill.includes('Microscope')) sheet.getRange(i + 1, skillColumns['microscope'] + 1).setValue('Yes');
+            if (skill.includes('Endoscopic')) sheet.getRange(i + 1, skillColumns['endoscopic'] + 1).setValue('Yes');
+            if (skill.includes('Irrigation')) sheet.getRange(i + 1, skillColumns['irrigation'] + 1).setValue('Yes');
+            if (skill.includes('Manual')) sheet.getRange(i + 1, skillColumns['manual'] + 1).setValue('Yes');
+          });
+
+          actualUpdates.skills = params.skills;
+        }
+        
+        // Add update timestamp
+        let updateIndex = findColumnIndex(headers, 'Last Updated');
+        if (updateIndex === -1) {
+          sheet.insertColumnAfter(headers.length);
+          updateIndex = headers.length;
+          sheet.getRange(1, updateIndex + 1).setValue('Last Updated');
+        }
+        sheet.getRange(i + 1, updateIndex + 1).setValue(new Date().toLocaleString('en-GB'));
+
+        // Send notification email to admin
+        sendUpdateNotification(phoneNumber, finalPracticeName, params);
+
+        // Send confirmation email to practice
+        sendPracticeUpdateConfirmation(finalEmail, finalPracticeName, phoneNumber, actualUpdates);
+        
+        return ContentService.createTextOutput(
+          JSON.stringify({success: true, message: 'Details updated successfully'})
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+    
+    return ContentService.createTextOutput(
+      JSON.stringify({success: false, message: 'Practice not found'})
+    ).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    console.error('Update error:', error);
+    return ContentService.createTextOutput(
+      JSON.stringify({success: false, message: 'Server error'})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Send status change notification to admin
+ */
+function sendStatusChangeNotification(phoneNumber, practiceName, status, reason) {
+  try {
+    const subject = status === 'Paused' ? 
+      `⏸️ Clinic Paused - ${practiceName}` : 
+      `▶️ Clinic Resumed - ${practiceName}`;
+    
+    const body = `Hello Admin,
+
+A clinic has updated their status via the self-service portal:
+
+Practice: ${practiceName}
+Phone: ${phoneNumber}
+New Status: ${status}
+${reason ? `Reason: ${reason}` : ''}
+
+Timestamp: ${new Date().toLocaleString('en-GB')}
+
+View Sheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}
+
+Best regards,
+Earwax Clinic Network System`;
+
+    GmailApp.sendEmail(ADMIN_EMAIL, subject, body);
+  } catch (error) {
+    console.error('Failed to send status notification:', error);
+  }
+}
+
+/**
+ * Send practice confirmation email for pause/resume actions
+ */
+function sendPracticeConfirmation(practiceName, practitionerName, practiceEmail, status, reason, resumeDate) {
+  if (!practiceEmail) {
+    console.log('No email address available for practice confirmation');
+    return false;
+  }
+
+  try {
+    const isPaused = status === 'Paused';
+    const subject = isPaused ?
+      `Your Earwax Clinic Network listing has been paused` :
+      `Your Earwax Clinic Network listing has been resumed`;
+
+    let body = `Dear ${practitionerName},
+
+We're writing to confirm that your listing on the Earwax Clinic Network has been ${isPaused ? 'paused' : 'resumed'}.
+
+`;
+
+    if (isPaused) {
+      body += `WHAT THIS MEANS:
+• Your practice (${practiceName}) is now hidden from our public map
+• Patients will not be able to find or contact you through our network
+• Your listing will show "Currently Not Taking Bookings" if someone has a direct link
+• No charges will be applied while your listing is paused
+
+`;
+
+      if (reason) {
+        body += `PAUSE REASON: ${reason}
+
+`;
+      }
+
+      if (resumeDate) {
+        body += `EXPECTED RESUME DATE: ${new Date(resumeDate).toLocaleDateString('en-GB')}
+
+`;
+      }
+
+      body += `TO RESUME YOUR LISTING:
+You can resume your listing at any time by visiting: thehearinglabstore.co.uk/leads/update
+
+`;
+    } else {
+      body += `WHAT THIS MEANS:
+• Your practice (${practiceName}) is now visible on our public map
+• Patients can find and contact you through our network
+• Your full listing details, including pricing and contact information, are displayed
+• Standard charges will apply for any leads generated
+
+`;
+    }
+
+    body += `If you did not make this change, please contact us immediately.
+
+NEED HELP?
+If you have any questions or need assistance with your listing, please don't hesitate to contact us.
+
+Thank you for being part of the Earwax Clinic Network.
+
+Best regards,
+The Earwax Clinic Network Team
+earwaxclinic.co.uk`;
+
+    GmailApp.sendEmail(
+      practiceEmail,
+      subject,
+      body,
+      {
+        name: 'Earwax Clinic Network',
+        replyTo: REPLY_TO_EMAIL
+      }
+    );
+
+    console.log(`Practice confirmation email sent to ${practiceEmail}`);
+    return true;
+
+  } catch (error) {
+    console.error('Failed to send practice confirmation email:', error);
+    return false;
+  }
+}
+
+/**
+ * Send practice update confirmation email
+ */
+function sendPracticeUpdateConfirmation(practiceEmail, practiceName, phoneNumber, actualUpdates) {
+  if (!practiceEmail) {
+    console.log('No email address available for practice update confirmation');
+    return false;
+  }
+
+  if (!actualUpdates || Object.keys(actualUpdates).length === 0) {
+    console.log('No actual changes to confirm');
+    return true; // No changes, so no need to send email
+  }
+
+  try {
+    const subject = 'Confirmation: Your Earwax Clinic Network Details Have Been Updated';
+
+    let body = `Dear ${practiceName},
+
+This email confirms that your practice details have been successfully updated in the Earwax Clinic Network.
+
+YOUR UPDATED INFORMATION:
+`;
+
+    // List only the fields that were actually changed
+    let geocodingNote = false;
+
+    if (actualUpdates.practiceName) {
+      body += `• Practice Name: ${actualUpdates.practiceName}
+`;
+    }
+
+    if (actualUpdates.email) {
+      body += `• Email Address: ${actualUpdates.email}
+`;
+    }
+
+    if (actualUpdates.postcode) {
+      body += `• Postcode: ${actualUpdates.postcode}
+`;
+      body += `  ⚠️ Note: Your location will be re-geocoded within 24 hours
+`;
+      geocodingNote = true;
+    }
+
+    if (actualUpdates.openingTimes) {
+      body += `• Opening Times: ${actualUpdates.openingTimes}
+`;
+    }
+
+    if (actualUpdates.costOneEar) {
+      body += `• Cost - One Ear: £${actualUpdates.costOneEar}
+`;
+    }
+
+    if (actualUpdates.costTwoEars) {
+      body += `• Cost - Two Ears: £${actualUpdates.costTwoEars}
+`;
+    }
+
+    if (actualUpdates.skills) {
+      body += `• Services Offered: ${actualUpdates.skills}
+`;
+    }
+
+    body += `
+WHAT HAPPENS NEXT:
+`;
+    body += `• Your changes are effective immediately on the public map
+`;
+    body += `• Patients will see your updated information when they view your listing
+`;
+
+    if (geocodingNote) {
+      body += `• Your new location coordinates will be updated within 24 hours
+`;
+    }
+
+    body += `
+IMPORTANT REMINDERS:
+`;
+    body += `• Your practice phone number (${phoneNumber}) cannot be changed through the self-service portal
+`;
+    body += `• If you need to change your phone number or virtual number, please contact admin
+
+`;
+
+    body += `TO MAKE FURTHER CHANGES:
+`;
+    body += `Visit thehearinglabstore.co.uk/leads/update and use your practice phone number to access your listing.
+
+`;
+
+    body += `If any of this information is incorrect or if you did not make these changes, please contact us immediately.
+
+`;
+
+    body += `Thank you for keeping your information up to date.
+
+`;
+    body += `Best regards,
+`;
+    body += `The Earwax Clinic Network Team
+`;
+    body += `earwaxclinic.co.uk`;
+
+    GmailApp.sendEmail(
+      practiceEmail,
+      subject,
+      body,
+      {
+        name: 'Earwax Clinic Network',
+        replyTo: REPLY_TO_EMAIL
+      }
+    );
+
+    console.log(`Practice update confirmation email sent to ${practiceEmail}`);
+    return true;
+
+  } catch (error) {
+    console.error('Failed to send practice update confirmation email:', error);
+    return false;
+  }
+}
+
+/**
+ * Send update notification to admin
+ */
+function sendUpdateNotification(phoneNumber, practiceName, updates) {
+  try {
+    const subject = `✏️ Clinic Details Updated - ${practiceName}`;
+
+    let updatedFields = [];
+    if (updates.practiceName) updatedFields.push('Practice Name');
+    if (updates.email) updatedFields.push('Email');
+    if (updates.postcode) updatedFields.push('Postcode (requires re-geocoding)');
+    if (updates.openingTimes) updatedFields.push('Opening Times');
+    if (updates.costOneEar || updates.costTwoEars) updatedFields.push('Pricing');
+    if (updates.skills) updatedFields.push('Services');
+
+    const body = `Hello Admin,
+
+A clinic has updated their details via the self-service portal:
+
+Practice: ${practiceName}
+Phone: ${phoneNumber}
+
+Fields Updated:
+${updatedFields.map(field => `• ${field}`).join('\n')}
+
+${updates.postcode ? '\n⚠️ Note: Postcode was changed. The clinic location will be re-geocoded at the next scheduled run.\n' : ''}
+
+Timestamp: ${new Date().toLocaleString('en-GB')}
+
+View Sheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}
+
+Best regards,
+Earwax Clinic Network System`;
+
+    GmailApp.sendEmail(ADMIN_EMAIL, subject, body);
+  } catch (error) {
+    console.error('Failed to send update notification:', error);
+  }
+}
+
+/**
+ * Handle deletion requests
+ */
+function handleDelete(params) {
+  try {
+    const phoneNumber = params.phone;
+    const reason = params.reason || 'No reason provided';
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    let data = sheet.getDataRange().getValues();
+    let headers = data[0];
+
+    // Find column indices
+    const practiceNumberIndex = findColumnIndex(headers, 'Practice Phone Number');
+    const practiceNameIndex = findColumnIndex(headers, 'Practice Name');
+    const practitionerNameIndex = findColumnIndex(headers, 'Practitioner Name');
+    const emailIndex = findColumnIndex(headers, 'Office Email');
+    const virtualNumberIndex = findColumnIndex(headers, 'Virtual Number');
+    let statusIndex = findColumnIndex(headers, 'Status');
+    let deletedDateIndex = findColumnIndex(headers, 'Deleted Date');
+    let deletedReasonIndex = findColumnIndex(headers, 'Deletion Reason');
+
+    // Add status columns if they don't exist and update indices
+    if (statusIndex === -1) {
+      const newCol = headers.length + 1; // 1-indexed for sheets
+      sheet.insertColumnAfter(headers.length);
+      sheet.getRange(1, newCol).setValue('Status');
+      statusIndex = headers.length; // 0-indexed for array
+      headers.push('Status'); // Update headers array
+    }
+
+    if (deletedDateIndex === -1) {
+      const newCol = headers.length + 1;
+      sheet.insertColumnAfter(headers.length);
+      sheet.getRange(1, newCol).setValue('Deleted Date');
+      deletedDateIndex = headers.length;
+      headers.push('Deleted Date');
+    }
+
+    if (deletedReasonIndex === -1) {
+      const newCol = headers.length + 1;
+      sheet.insertColumnAfter(headers.length);
+      sheet.getRange(1, newCol).setValue('Deletion Reason');
+      deletedReasonIndex = headers.length;
+      headers.push('Deletion Reason');
+    }
+
+    // Re-fetch data if we added columns
+    if (statusIndex === headers.length - 3 || deletedDateIndex === headers.length - 2 || deletedReasonIndex === headers.length - 1) {
+      data = sheet.getDataRange().getValues();
+    }
+
+    // Find and mark as deleted
+    for (let i = 1; i < data.length; i++) {
+      const storedPhone = String(data[i][practiceNumberIndex]).replace(/[\s\-\(\)]/g, '');
+      const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+
+      if (storedPhone === searchPhone) {
+        const practiceName = data[i][practiceNameIndex] || '';
+        const practitionerName = data[i][practitionerNameIndex] || '';
+        const practiceEmail = data[i][emailIndex] || '';
+        const virtualNumber = data[i][virtualNumberIndex] || '';
+
+        // Mark as deleted - using correct column indices
+        sheet.getRange(i + 1, statusIndex + 1).setValue('Deleted');
+        sheet.getRange(i + 1, deletedDateIndex + 1).setValue(new Date().toLocaleString('en-GB'));
+        sheet.getRange(i + 1, deletedReasonIndex + 1).setValue(reason);
+
+        // Force flush to ensure values are written
+        SpreadsheetApp.flush();
+
+        // Send notification emails
+        sendDeletionNotification(phoneNumber, practiceName, practitionerName, reason, virtualNumber);
+        sendDeletionConfirmation(practiceEmail, practiceName, practitionerName);
+
+        return ContentService.createTextOutput(
+          JSON.stringify({success: true, message: 'Listing deleted successfully'})
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    return ContentService.createTextOutput(
+      JSON.stringify({success: false, message: 'Practice not found'})
+    ).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    console.error('Delete error:', error);
+    return ContentService.createTextOutput(
+      JSON.stringify({success: false, message: 'Server error: ' + error.toString()})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Send deletion notification to admin and Jasper
+ */
+function sendDeletionNotification(phoneNumber, practiceName, practitionerName, reason, virtualNumber) {
+  try {
+    const subject = `🗑️ Clinic Deleted - ${practiceName}`;
+
+    const body = `Hello Admin,
+
+A clinic has been deleted from the Earwax Clinic Network:
+
+CLINIC DETAILS:
+- Practice Name: ${practiceName}
+- Practitioner: ${practitionerName}
+- Phone Number: ${phoneNumber}
+- Virtual Number: ${virtualNumber || 'Not assigned'}
+- Deletion Reason: ${reason}
+- Deletion Time: ${new Date().toLocaleString('en-GB')}
+
+ACTION REQUIRED:
+- The virtual number ${virtualNumber ? virtualNumber + ' is now available for reassignment' : 'was not yet assigned'}
+- The clinic has been removed from the public map
+- All billing should be stopped
+
+The record has been retained in the spreadsheet with status "Deleted" for historical purposes.
+
+View Sheet: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}
+
+Best regards,
+Earwax Clinic Network System`;
+
+    GmailApp.sendEmail(ADMIN_EMAIL, subject, body);
+
+    // Also notify Jasper if there was a virtual number
+    if (virtualNumber) {
+      GmailApp.sendEmail(
+        'Jaspericcom@me.com',
+        `Virtual Number ${virtualNumber} Now Available`,
+        `The virtual number ${virtualNumber} (previously assigned to ${practiceName}) is now available for reassignment as the clinic has deleted their listing.`
+      );
+    }
+
+  } catch (error) {
+    console.error('Failed to send deletion notification:', error);
+  }
+}
+
+/**
+ * Send deletion confirmation to practice
+ */
+function sendDeletionConfirmation(practiceEmail, practiceName, practitionerName) {
+  if (!practiceEmail) {
+    console.log('No email address available for deletion confirmation');
+    return;
+  }
+
+  try {
+    const subject = 'Your Earwax Clinic Network Listing Has Been Deleted';
+
+    const body = `Dear ${practitionerName},
+
+This confirms that your listing for ${practiceName} has been permanently deleted from the Earwax Clinic Network.
+
+WHAT THIS MEANS:
+- Your practice no longer appears on our public map
+- Patients cannot find or contact you through our network
+- No further charges will be applied
+- Your virtual number has been released
+
+WE'RE SORRY TO SEE YOU GO
+Thank you for being part of the Earwax Clinic Network. We hope we were able to help grow your practice during your time with us.
+
+WANT TO REJOIN?
+If you change your mind or have a new location to add, you can register again at any time:
+https://www.thehearinglabstore.co.uk/leads/
+
+FEEDBACK
+We'd appreciate any feedback about your experience with our network. Simply reply to this email with your thoughts.
+
+Best regards,
+The Earwax Clinic Network Team
+earwaxclinic.co.uk`;
+
+    GmailApp.sendEmail(
+      practiceEmail,
+      subject,
+      body,
+      {
+        name: 'Earwax Clinic Network',
+        replyTo: REPLY_TO_EMAIL
+      }
+    );
+
+    console.log(`Deletion confirmation sent to ${practiceEmail}`);
+
+  } catch (error) {
+    console.error('Failed to send deletion confirmation:', error);
+  }
+}
+/**
+ * Test function to check Jasper sheet connection
+ */
+function testJasperSheetConnection() {
+  try {
+    const jasperSpreadsheet = SpreadsheetApp.openById(JASPER_SHEET_ID);
+    const jasperSheet = jasperSpreadsheet.getActiveSheet();
+    const data = jasperSheet.getDataRange().getValues();
+    
+    console.log('Jasper sheet connected successfully!');
+    console.log('Number of rows in Jasper sheet:', data.length);
+    
+    // Show first few entries
+    for (let i = 0; i < Math.min(5, data.length); i++) {
+      console.log(`Row ${i}:`, data[i]);
+    }
+    
+    SpreadsheetApp.getUi().alert(
+      'Connection Test Successful',
+      `Connected to Jasper sheet!\nRows found: ${data.length}`,
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    
+  } catch (error) {
+    console.error('Failed to connect to Jasper sheet:', error);
+    SpreadsheetApp.getUi().alert(
+      'Connection Test Failed',
+      'Could not connect to Jasper sheet. Check the JASPER_SHEET_ID.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  }
+}
+/**
+ * Simple test to verify Jasper sheet access
+ */
+function simpleJasperTest() {
+  try {
+    // Test 1: Can we open the sheet?
+    console.log('Sheet ID:', JASPER_SHEET_ID);
+    
+    const spreadsheet = SpreadsheetApp.openById(JASPER_SHEET_ID);
+    console.log('Opened spreadsheet successfully');
+    
+    // Test 2: Can we get the sheet name?
+    const sheetName = spreadsheet.getName();
+    console.log('Sheet name:', sheetName);
+    
+    // Test 3: Can we access the first sheet?
+    const sheet = spreadsheet.getActiveSheet();
+    console.log('Got active sheet');
+    
+    // Test 4: Can we read a single cell?
+    const cellValue = sheet.getRange(1, 1).getValue();
+    console.log('Cell A1 value:', cellValue);
+    
+    SpreadsheetApp.getUi().alert('Success', 'Connected to: ' + sheetName, SpreadsheetApp.getUi().ButtonSet.OK);
+    
+  } catch (error) {
+    console.error('Error details:', error.toString());
+    SpreadsheetApp.getUi().alert('Error', 'Error: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+/**
+ * Diagnostic function to show data in both sheets
+ */
+function diagnoseSyncIssue() {
+  console.log('=== DIAGNOSTIC CHECK ===');
+  
+  // Check Jasper's sheet
+  try {
+    const jasperSpreadsheet = SpreadsheetApp.openById(JASPER_SHEET_ID);
+    const jasperSheet = jasperSpreadsheet.getActiveSheet();
+    const jasperData = jasperSheet.getDataRange().getValues();
+    
+    console.log('\n--- JASPER SHEET DATA ---');
+    console.log('Total rows:', jasperData.length);
+    
+    for (let i = 0; i < Math.min(5, jasperData.length); i++) {
+      if (i === 0) {
+        console.log('Headers:', jasperData[i]);
+      } else {
+        console.log(`Row ${i}: Name="${jasperData[i][0]}", Phone="${jasperData[i][1]}", VirtualNum="${jasperData[i][2]}"`);
+      }
+    }
+  } catch (error) {
+    console.error('Error reading Jasper sheet:', error);
+  }
+  
+  // Check main sheet
+  try {
+    const mainSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const mainData = mainSheet.getDataRange().getValues();
+    const mainHeaders = mainData[0];
+    
+    console.log('\n--- MAIN SHEET INFO ---');
+    console.log('Total rows:', mainData.length);
+    
+    const practiceNumberIndex = findColumnIndex(mainHeaders, 'Practice Phone Number');
+    const virtualNumberIndex = findColumnIndex(mainHeaders, 'Virtual Number');
+    
+    console.log('Practice Phone Number column index:', practiceNumberIndex);
+    console.log('Virtual Number column index:', virtualNumberIndex);
+    
+    // Show first few practices
+    for (let i = 1; i < Math.min(5, mainData.length); i++) {
+      if (practiceNumberIndex !== -1) {
+        const phone = mainData[i][practiceNumberIndex];
+        const virtualNum = virtualNumberIndex !== -1 ? mainData[i][virtualNumberIndex] : 'Column not found';
+        console.log(`Row ${i}: Phone="${phone}", VirtualNum="${virtualNum}"`);
+      }
+    }
+  } catch (error) {
+    console.error('Error reading main sheet:', error);
+  }
+}
+
+/**
+ * Protect the main sheet while allowing script edits
+ */
+function protectMainSheet() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Error', 'Main sheet not found', SpreadsheetApp.getUi().ButtonSet.OK);
+    return;
+  }
+
+  // Remove any existing protections on this sheet
+  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+  protections.forEach(p => p.remove());
+
+  // Create new protection
+  const protection = sheet.protect();
+  protection.setDescription('Protected - Automated Updates Only');
+  protection.setWarningOnly(false);
+
+  // Remove all editors except the owner
+  const editors = protection.getEditors();
+  protection.removeEditors(editors);
+
+  // The script will still work because it runs as the owner
+
+  SpreadsheetApp.getUi().alert(
+    'Sheet Protected',
+    'The main sheet is now protected.\n\nOnly automated updates are allowed:\n• Form submissions\n• Self-service portal updates\n• Virtual number syncs\n• Geocoding updates\n\nAs the owner, you can still make emergency edits if needed.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Remove protection from main sheet
+ */
+function unprotectMainSheet() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Error', 'Main sheet not found', SpreadsheetApp.getUi().ButtonSet.OK);
+    return;
+  }
+
+  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+
+  if (protections.length === 0) {
+    SpreadsheetApp.getUi().alert(
+      'No Protection Found',
+      'The main sheet is not currently protected.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  protections.forEach(p => p.remove());
+
+  SpreadsheetApp.getUi().alert(
+    'Protection Removed',
+    'The main sheet protection has been removed.\n\nWarning: The sheet can now be edited manually.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+/**
+ * Check protection status
+ */
+function checkProtectionStatus() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Error', 'Main sheet not found', SpreadsheetApp.getUi().ButtonSet.OK);
+    return;
+  }
+
+  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+
+  if (protections.length === 0) {
+    SpreadsheetApp.getUi().alert(
+      'Protection Status',
+      'The main sheet is NOT protected.\n\nAnyone with edit access can modify the data.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  } else {
+    const protection = protections[0];
+    const editors = protection.getEditors().map(e => e.getEmail());
+
+    SpreadsheetApp.getUi().alert(
+      'Protection Status',
+      `The main sheet IS protected.\n\nDescription: ${protection.getDescription()}\nEditors with access: ${editors.length > 0 ? editors.join(', ') : 'Owner only'}\n\nAll automated updates still work.`,
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  }
+}
+
+/**
+ * Send verification code to clinic email (improved version with better normalization)
+ */
+function sendVerificationCode(phoneNumber) {
+  try {
+    // Find the clinic by phone number
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    const phoneIndex = findColumnIndex(headers, 'Practice Phone Number');
+    const emailIndex = findColumnIndex(headers, 'Office Email');
+    const practiceNameIndex = findColumnIndex(headers, 'Practice Name');
+    const practitionerNameIndex = findColumnIndex(headers, 'Practitioner Name');
+
+    // Normalize phone for matching - remove ALL formatting
+    const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+    console.log('Searching for normalized phone:', searchPhone);
+
+    for (let i = 1; i < data.length; i++) {
+      const storedPhone = String(data[i][phoneIndex]).replace(/[\s\-\(\)]/g, '');
+
+      if (storedPhone === searchPhone) {
+        const email = data[i][emailIndex];
+        const practiceName = data[i][practiceNameIndex];
+        const practitionerName = data[i][practitionerNameIndex];
+
+        if (!email) {
+          return {success: false, message: 'No email address on file for this practice'};
+        }
+
+        // Generate 6-digit code
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        console.log('Generated code:', code, 'for phone:', searchPhone);
+
+        // Use Properties Service with consistent key format
+        const properties = PropertiesService.getScriptProperties();
+        const storageKey = 'verify_' + searchPhone; // Use normalized phone
+        const expiryTime = new Date().getTime() + (15 * 60 * 1000); // 15 minutes
+
+        // Store verification data
+        const dataToStore = {
+          code: code,
+          email: email,
+          attempts: 0,
+          practiceName: practiceName,
+          expiry: expiryTime,
+          phone: searchPhone // Store the normalized phone
+        };
+
+        properties.setProperty(storageKey, JSON.stringify(dataToStore));
+
+        // Verify storage immediately
+        const stored = properties.getProperty(storageKey);
+        console.log('Verification - stored successfully:', stored ? 'YES' : 'NO');
+
+        // Send email
+        const subject = 'Your Verification Code - Earwax Clinic Network';
+        const body = `Dear ${practitionerName || practiceName},
+
+Your verification code is: ${code}
+
+This code will expire in 15 minutes.
+
+If you didn't request this code, please ignore this email.
+
+Best regards,
+The Earwax Clinic Network Team
+earwaxclinic.co.uk`;
+
+        GmailApp.sendEmail(
+          email,
+          subject,
+          body,
+          {
+            name: 'Earwax Clinic Network',
+            replyTo: REPLY_TO_EMAIL
+          }
+        );
+
+        console.log(`Code ${code} sent to ${email} for ${practiceName}`);
+        return {
+          success: true,
+          message: 'Code sent to registered email',
+          email: email.replace(/(.{2}).*(@.*)/, '$1***$2')
+        };
+      }
+    }
+
+    return {success: false, message: 'Phone number not found in our records'};
+
+  } catch (error) {
+    console.error('Error sending verification code:', error.toString());
+    return {success: false, message: 'Error sending code: ' + error.toString()};
+  }
+}
+
+/**
+ * Verify the code entered by user (fixed version with consistent normalization)
+ */
+function verifyCode(phoneNumber, code) {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    // Normalize phone number the same way as in sendVerificationCode
+    const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+    const storageKey = 'verify_' + searchPhone;
+
+    console.log('Verifying - looking for key:', storageKey);
+    console.log('Entered code:', code);
+
+    // Retrieve from properties
+    const storedData = properties.getProperty(storageKey);
+
+    if (!storedData) {
+      console.log('No data found for key:', storageKey);
+      return {success: false, message: 'No verification code found. Please request a new one.'};
+    }
+
+    const data = JSON.parse(storedData);
+    console.log('Found stored code:', data.code);
+    console.log('Stored expiry:', new Date(data.expiry));
+
+    // Check if expired
+    const currentTime = new Date().getTime();
+    if (currentTime > data.expiry) {
+      console.log('Code expired. Current time:', new Date(currentTime), 'Expiry:', new Date(data.expiry));
+      properties.deleteProperty(storageKey);
+      return {success: false, message: 'Verification code has expired. Please request a new one.'};
+    }
+
+    // Check attempts
+    if (data.attempts >= 3) {
+      console.log('Too many attempts');
+      properties.deleteProperty(storageKey);
+      return {success: false, message: 'Too many failed attempts. Please request a new code.'};
+    }
+
+    // Compare codes - ensure both are strings and trimmed
+    const enteredCode = String(code).trim();
+    const storedCode = String(data.code).trim();
+
+    console.log('Comparing:', enteredCode, '===', storedCode);
+
+    if (enteredCode === storedCode) {
+      console.log('Codes match! Success');
+      // Success - remove from properties
+      properties.deleteProperty(storageKey);
+
+      // Now get the practice details
+      return handleVerification(phoneNumber);
+    } else {
+      console.log('Codes do not match');
+      // Failed attempt - increment counter
+      data.attempts++;
+      properties.setProperty(storageKey, JSON.stringify(data));
+      const remaining = 3 - data.attempts;
+      return {
+        success: false,
+        message: `Invalid code. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`
+      };
+    }
+
+  } catch (error) {
+    console.error('Error verifying code:', error.toString());
+    return {success: false, message: 'Verification error: ' + error.toString()};
+  }
+}
+
+/**
+ * Clean up expired verification codes from Properties Service
+ */
+function cleanupExpiredCodes() {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const allProperties = properties.getProperties();
+    const currentTime = new Date().getTime();
+    let cleanedCount = 0;
+
+    // Find all verification codes and check if they're expired
+    for (const [key, value] of Object.entries(allProperties)) {
+      if (key.startsWith('verify_')) {
+        try {
+          const data = JSON.parse(value);
+          if (data.expiry && currentTime > data.expiry) {
+            properties.deleteProperty(key);
+            cleanedCount++;
+            console.log(`Cleaned expired code for key: ${key}`);
+          }
+        } catch (error) {
+          // If we can't parse it, it's corrupted, so remove it
+          properties.deleteProperty(key);
+          cleanedCount++;
+          console.log(`Cleaned corrupted code for key: ${key}`);
+        }
+      }
+    }
+
+    console.log(`Cleanup completed. Removed ${cleanedCount} expired/corrupted codes.`);
+    return {success: true, cleaned: cleanedCount};
+
+  } catch (error) {
+    console.error('Error during cleanup:', error);
+    return {success: false, error: error.toString()};
+  }
+}
+
+/**
+ * Set up automatic cleanup trigger for 3 AM daily
+ */
+function setupCodeCleanup() {
+  try {
+    // Delete existing triggers first
+    const triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(trigger => {
+      if (trigger.getHandlerFunction() === 'cleanupExpiredCodes') {
+        ScriptApp.deleteTrigger(trigger);
+      }
+    });
+
+    // Create new daily trigger for 3 AM
+    ScriptApp.newTrigger('cleanupExpiredCodes')
+      .timeBased()
+      .everyDays(1)
+      .atHour(3)
+      .create();
+
+    console.log('Cleanup trigger set for 3 AM daily');
+    return {success: true, message: 'Daily cleanup scheduled for 3 AM'};
+
+  } catch (error) {
+    console.error('Error setting up cleanup trigger:', error);
+    return {success: false, error: error.toString()};
+  }
+}
+
+/**
+ * Manually check what's stored for a phone number
+ */
+function checkStoredCode(phoneNumber) {
+  const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+  const storageKey = 'verify_' + searchPhone;
+
+  console.log('Checking storage for:', storageKey);
+
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const storedData = scriptProperties.getProperty(storageKey);
+
+  if (storedData) {
+    const parsed = JSON.parse(storedData);
+    console.log('Found stored data:');
+    console.log('Code:', parsed.code);
+    console.log('Email:', parsed.email);
+    console.log('Attempts:', parsed.attempts);
+    console.log('Expiry:', new Date(parsed.expiry).toISOString());
+    console.log('Expired?', Date.now() > parsed.expiry);
+  } else {
+    console.log('No data found for this phone number');
+
+    // Check all verification keys
+    const allProps = scriptProperties.getProperties();
+    const verifyKeys = Object.keys(allProps).filter(k => k.startsWith('verify_'));
+    console.log('All verification keys in storage:', verifyKeys);
+  }
+}
+
+/**
+ * Clear all verification codes - use this to clean up stuck codes
+ */
+function clearAllVerificationCodes() {
+  const properties = PropertiesService.getScriptProperties();
+  const allProps = properties.getProperties();
+  let cleared = 0;
+
+  for (const key in allProps) {
+    if (key.startsWith('verify_')) {
+      properties.deleteProperty(key);
+      cleared++;
+      console.log('Cleared:', key);
+    }
+  }
+
+  console.log(`Total cleared: ${cleared} verification codes`);
+  return {success: true, cleared: cleared};
+}
+
+/**
+ * Test the verification system end-to-end
+ */
+function testVerificationSystem() {
+  const testPhone = '07429459299'; // Replace with a real test phone from your sheet
+
+  console.log('=== TESTING VERIFICATION SYSTEM ===');
+  console.log('Test phone:', testPhone);
+
+  // Step 1: Clear any existing codes
+  clearAllVerificationCodes();
+
+  // Step 2: Send code
+  console.log('\n--- SENDING CODE ---');
+  const sendResult = sendVerificationCode(testPhone);
+  console.log('Send result:', JSON.stringify(sendResult));
+
+  if (sendResult.success) {
+    // Step 3: Check what's stored
+    const properties = PropertiesService.getScriptProperties();
+    const searchPhone = testPhone.replace(/[\s\-\(\)]/g, '');
+    const storageKey = 'verify_' + searchPhone;
+    const stored = properties.getProperty(storageKey);
+
+    if (stored) {
+      const data = JSON.parse(stored);
+      console.log('\n--- STORED DATA ---');
+      console.log('Code:', data.code);
+      console.log('Email:', data.email);
+      console.log('Expiry:', new Date(data.expiry).toLocaleString());
+
+      // Step 4: Test verification with correct code
+      console.log('\n--- VERIFYING CORRECT CODE ---');
+      const verifyResult = verifyCode(testPhone, data.code);
+      console.log('Verify result:', JSON.stringify(verifyResult));
+
+      // Step 5: Test with wrong code (if first verification didn't succeed)
+      if (!verifyResult.success) {
+        console.log('\n--- TESTING WRONG CODE ---');
+        const wrongResult = verifyCode(testPhone, '000000');
+        console.log('Wrong code result:', JSON.stringify(wrongResult));
+      }
+    } else {
+      console.log('ERROR: Code was not stored properly');
+    }
+  } else {
+    console.log('ERROR: Failed to send code');
+  }
+}
+
+/**
+ * Check what verification codes are currently stored
+ */
+function checkStoredCodes() {
+  const properties = PropertiesService.getScriptProperties();
+  const allProps = properties.getProperties();
+  let found = 0;
+
+  console.log('=== STORED VERIFICATION CODES ===');
+
+  for (const key in allProps) {
+    if (key.startsWith('verify_')) {
+      found++;
+      const data = JSON.parse(allProps[key]);
+      console.log(`\nKey: ${key}`);
+      console.log('Code:', data.code);
+      console.log('Email:', data.email);
+      console.log('Attempts:', data.attempts);
+      console.log('Expires:', new Date(data.expiry).toLocaleString());
+      console.log('Expired?', new Date().getTime() > data.expiry);
+    }
+  }
+
+  if (found === 0) {
+    console.log('No verification codes currently stored');
+  } else {
+    console.log(`\nTotal: ${found} codes found`);
+  }
+
+  return {success: true, count: found};
+}
+
+/**
+ * Debug function to see what's in cache and test verification
+ */
+function debugVerification() {
+  const testPhone = '07429459299'; // Replace with your test phone number
+  
+  console.log('=== DEBUG VERIFICATION ===');
+  
+  // Check what's in cache
+  const cache = CacheService.getScriptCache();
+  const searchPhone = testPhone.replace(/[\s\-\(\)]/g, '');
+  const storageKey = 'verify_' + searchPhone;
+  
+  console.log('Looking for key:', storageKey);
+  
+  const cachedData = cache.get(storageKey);
+  console.log('Raw cached data:', cachedData);
+  
+  if (cachedData) {
+    const parsed = JSON.parse(cachedData);
+    console.log('Parsed data:', parsed);
+    console.log('Stored code:', parsed.code);
+    console.log('Code type:', typeof parsed.code);
+  } else {
+    console.log('No data found in cache for this key');
+  }
+  
+  // Try to manually send and retrieve
+  console.log('\n=== MANUAL TEST ===');
+  const testCode = '654321';
+  cache.put(storageKey, JSON.stringify({
+    code: testCode,
+    email: 'test@test.com',
+    attempts: 0,
+    practiceName: 'Test Practice'
+  }), 900);
+  
+  console.log('Manually stored code:', testCode);
+  
+  const retrieved = cache.get(storageKey);
+  if (retrieved) {
+    const data = JSON.parse(retrieved);
+    console.log('Retrieved code:', data.code);
+    console.log('Codes match:', data.code === testCode);
+  }
+}
+
+/**
+ * Debug version of verifyCode with extensive logging
+ */
+function verifyCodeDebug(phoneNumber, code) {
+  console.log('=== VERIFY CODE DEBUG ===');
+  console.log('Input phone:', phoneNumber);
+  console.log('Input code:', code);
+  console.log('Code type:', typeof code);
+  
+  try {
+    const cache = CacheService.getScriptCache();
+    const searchPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+    const storageKey = 'verify_' + searchPhone;
+    
+    console.log('Storage key:', storageKey);
+    
+    // Retrieve from cache
+    const storedData = cache.get(storageKey);
+    console.log('Raw stored data:', storedData);
+    
+    if (!storedData) {
+      console.log('No data found in cache');
+      return {success: false, message: 'No verification code found or code expired. Please request a new one.'};
+    }
+    
+    const data = JSON.parse(storedData);
+    console.log('Parsed data:', JSON.stringify(data));
+    
+    // Compare codes as strings, trimmed
+    const enteredCode = String(code).trim();
+    const storedCode = String(data.code).trim();
+    
+    console.log('Entered code (processed):', enteredCode);
+    console.log('Stored code (processed):', storedCode);
+    console.log('Length entered:', enteredCode.length);
+    console.log('Length stored:', storedCode.length);
+    console.log('Character by character comparison:');
+    for (let i = 0; i < Math.max(enteredCode.length, storedCode.length); i++) {
+      console.log(`Position ${i}: "${enteredCode[i] || 'undefined'}" vs "${storedCode[i] || 'undefined'}" (char codes: ${enteredCode.charCodeAt(i) || 'N/A'} vs ${storedCode.charCodeAt(i) || 'N/A'})`);
+    }
+    console.log('Codes match:', enteredCode === storedCode);
+    
+    if (enteredCode === storedCode) {
+      console.log('SUCCESS - Codes matched!');
+      cache.remove(storageKey);
+      return handleVerification(phoneNumber);
+    } else {
+      console.log('FAILED - Codes did not match');
+      data.attempts++;
+      cache.put(storageKey, JSON.stringify(data), 900);
+      const remaining = 3 - data.attempts;
+      return {success: false, message: `Invalid code. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`};
+    }
+    
+  } catch (error) {
+    console.error('Error in verifyCodeDebug:', error);
+    return {success: false, message: 'Verification error: ' + error.toString()};
+  }
+}
+
+/**
+ * Test function to verify Cache Service is working
+ */
+function testCacheService() {
+  const cache = CacheService.getDocumentCache(); // Changed to Document Cache
+  const testKey = 'test_' + new Date().getTime();
+  const testValue = 'Hello Cache!';
+
+  // Store
+  cache.put(testKey, testValue, 60); // 60 seconds
+  console.log('Stored:', testValue);
+
+  // Retrieve
+  const retrieved = cache.get(testKey);
+  console.log('Retrieved:', retrieved);
+  console.log('Match:', retrieved === testValue);
+
+  // Clean up
+  cache.remove(testKey);
+  console.log('Cleaned up test cache');
+
+  return retrieved === testValue;
+}
+
+/**
+ * Manual function to clear all verification codes from cache
+ * Use only in emergencies or for testing
+ */
+function clearAllVerificationCodes() {
+  const cache = CacheService.getScriptCache();
+  // Cache Service doesn't allow listing all keys, so we can't selectively clear
+  // This will clear ALL cache entries for this script
+  cache.removeAll(['verify_']); // This won't work as expected
+
+  // Better approach: maintain a list of phone numbers if needed
+  console.log('Note: Cache Service auto-expires entries after 15 minutes');
+  console.log('Manual clearing of specific codes requires knowing the phone numbers');
+}
+
+/**
+ * Test the complete flow manually
+ */
+function testCompleteFlow() {
+  const testPhone = '07429459299'; // Update with your test number
+
+  console.log('=== TESTING COMPLETE FLOW ===');
+
+  // Step 1: Send code
+  console.log('Step 1: Sending code...');
+  const sendResult = sendVerificationCode(testPhone);
+  console.log('Send result:', sendResult);
+
+  // Step 2: Check cache
+  console.log('\nStep 2: Checking cache...');
+  const cache = CacheService.getDocumentCache(); // Changed to Document Cache
+  const key = 'verify_' + testPhone.replace(/[\s\-\(\)]/g, '');
+  const cached = cache.get(key);
+  console.log('Cache key:', key);
+  console.log('Cached data:', cached);
+
+  if (cached) {
+    const data = JSON.parse(cached);
+    console.log('Code in cache:', data.code);
+
+    // Step 3: Try verification
+    console.log('\nStep 3: Testing verification with code:', data.code);
+    const verifyResult = verifyCode(testPhone, data.code);
+    console.log('Verification result:', verifyResult);
+  }
+}
+
+/**
+ * Test geocoding for a specific failed clinic
+ */
+function testFailedClinicGeocoding() {
+  const ui = SpreadsheetApp.getUi();
+
+  const response = ui.prompt(
+    'Test Failed Geocoding',
+    'Enter the Practice Postcode to test:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const postcode = response.getResponseText();
+
+    // Try with a generic name first
+    console.log('Testing postcode:', postcode);
+    const result1 = geocodeAddressGoogle('Ear Clinic, ' + postcode + ', UK', postcode);
+
+    if (result1) {
+      ui.alert(
+        'Success!',
+        `Postcode: ${postcode}\nLatitude: ${result1.lat}\nLongitude: ${result1.lng}`,
+        ui.ButtonSet.OK
+      );
+    } else {
+      ui.alert('Failed', `Could not geocode postcode: ${postcode}`, ui.ButtonSet.OK);
+    }
+  }
+}
+
